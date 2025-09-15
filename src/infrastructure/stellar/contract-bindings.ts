@@ -157,7 +157,7 @@ export class ContractBindings {
    * @param params - The get score parameters
    * @returns Promise<number> - The score as a u32
    */
-  async getScore(params: GetScoreParams): Promise<number> {
+  async get_score(params: GetScoreParams): Promise<number> {
     this.logger.log('Mock contract bindings: get_score function called');
     this.logger.log(`Parameters: wallet=${params.wallet}`);
 

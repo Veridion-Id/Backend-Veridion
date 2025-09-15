@@ -15,4 +15,9 @@ export class PlatformController {
   async getVerifications(@Param('wallet') wallet: string): Promise<{ verifications?: Verification[]; success: boolean; message: string }> {
     return this.platformService.getVerifications(wallet);
   }
+
+  @Get('is-human/:wallet')
+  async isHuman(@Param('wallet') wallet: string): Promise<{ isHuman?: boolean; score?: number; success: boolean; message: string }> {
+    return this.platformService.isHuman(wallet);
+  }
 }

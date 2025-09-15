@@ -57,7 +57,7 @@ export class StellarService {
 
       // Use the contract bindings (mock for now)
       // The contract returns a u32 value directly
-      const score = await this.contractBindings.getScore({ wallet });
+      const score = await this.contractBindings.get_score({ wallet });
 
       this.logger.log(`Score retrieved successfully for wallet: ${wallet}, score: ${score}`);
       return score;
