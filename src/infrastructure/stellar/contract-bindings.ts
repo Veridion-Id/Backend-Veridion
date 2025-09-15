@@ -1,5 +1,5 @@
 /**
- * Mock Stellar Smart Contract Bindings
+ * Mock Stellar Smart Contract Bindings (UNUSED)
  * 
  * This file contains mock implementations for the smart contract functions.
  * When the real bindings are generated, this file should be replaced with

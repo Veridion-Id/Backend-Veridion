@@ -32,12 +32,20 @@ export class AdminController {
     return this.adminService.submitSignedTransaction(submitDto);
   }
 
-  @Post('create-verification')
+  @Post('create-verification/build')
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   async buildCreateVerificationTransaction(
     @Body() buildDto: BuildCreateVerificationTransactionDto
   ): Promise<BuildCreateVerificationTransactionResponse> {
     return this.adminService.buildCreateVerificationTransaction(buildDto);
+  }
+
+  @Post('create-verification/submit')
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  async submitCreateVerificationTransaction(
+    @Body() submitDto: SubmitSignedTransactionDto
+  ): Promise<SubmitSignedTransactionResponse> {
+    return this.adminService.submitSignedTransaction(submitDto);
   }
 
   @Get('api-key')
@@ -48,5 +56,10 @@ export class AdminController {
   @Get('api-key-hm/:wallet')
   async generateApiKeyForHuman(@Param('wallet') wallet: string): Promise<HumanApiKeyResponse> {
     return this.adminService.generateApiKeyForHuman(wallet);
+  }
+
+  @Get('account-sequence/:accountId')
+  async getAccountSequence(@Param('accountId') accountId: string): Promise<{ sequence: string; success: boolean; error?: string }> {
+    return this.adminService.getAccountSequence(accountId);
   }
 }

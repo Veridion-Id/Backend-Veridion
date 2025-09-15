@@ -39,7 +39,7 @@ export class AdminService {
         buildDto.surnames,
         buildDto.sourceAccount
       );
-
+      this.logger.log(buildDto);
       if (result.success) {
         this.logger.log(`Transaction built successfully for wallet: ${buildDto.wallet}`);
         return {
@@ -92,10 +92,16 @@ export class AdminService {
           resultMeta: result.resultMeta
         };
       } else {
+        // Provide helpful error message for sequence issues
+        const message = result.error?.includes('sequence') && result.error?.includes('outdated')
+          ? `Failed to submit transaction: ${result.error}. Please call the build endpoint again to get a new transaction with the current sequence number.`
+          : `Failed to submit transaction: ${result.error}`;
+        
         return {
           success: false,
-          message: `Failed to submit transaction: ${result.error}`,
-          error: result.error
+          message: message,
+          error: result.error,
+          rebuiltXdr: result.rebuiltXdr // Pass through the rebuilt XDR if available
         };
       }
 
@@ -262,6 +268,13 @@ export class AdminService {
         // For custom types, wrap in Custom
         return { tag: 'Custom', values: [type] };
     }
+  }
+
+  /**
+   * Get the current sequence number for an account
+   */
+  async getAccountSequence(accountId: string): Promise<{ sequence: string; success: boolean; error?: string }> {
+    return this.stellarService.getAccountSequence(accountId);
   }
 
 }
