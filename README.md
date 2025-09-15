@@ -84,6 +84,7 @@ src/
 
 - **Framework**: [NestJS](https://nestjs.com/) - Progressive Node.js framework
 - **Language**: [TypeScript](https://www.typescriptlang.org/) - Strict mode enabled
+- **Backend Services**: [Firebase Admin SDK](https://firebase.google.com/docs/admin) - Authentication and Firestore
 - **Documentation**: [Swagger/OpenAPI](https://swagger.io/) - Available at `/docs`
 - **Testing**: [Jest](https://jestjs.io/) - Unit and E2E testing
 - **Code Quality**: [ESLint](https://eslint.org/) + [Prettier](https://prettier.io/)
@@ -125,7 +126,12 @@ Create a `.env` file in the root directory:
 PORT=3000
 NODE_ENV=development
 
-# Add your configuration variables here
+# Firebase Configuration
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n"
+FIREBASE_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
+
+# Add your other configuration variables here
 ```
 ## 📖 API Documentation
 
