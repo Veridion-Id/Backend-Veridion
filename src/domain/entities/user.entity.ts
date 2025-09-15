@@ -7,7 +7,7 @@ export enum UserStatus {
 }
 
 export interface User {
-  walletAddress: string; // This is now the ID
+  walletAddress: string; // acts like an id
   name: string;
   status: UserStatus;
   createdAt: Date;
