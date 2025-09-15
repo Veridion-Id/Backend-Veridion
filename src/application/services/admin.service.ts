@@ -4,7 +4,9 @@ import {
   BuildRegisterTransactionDto,
   BuildRegisterTransactionResponse,
   SubmitSignedTransactionDto,
-  SubmitSignedTransactionResponse
+  SubmitSignedTransactionResponse,
+  BuildCreateVerificationTransactionDto,
+  BuildCreateVerificationTransactionResponse
 } from '../../domain/entities/admin.entity';
 
 @Injectable()
@@ -96,6 +98,53 @@ export class AdminService {
       return {
         success: false,
         message: `Failed to submit transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Build a transaction for creating verification (BUILD phase)
+   * Creates an unsigned XDR transaction that the client can sign
+   */
+  async buildCreateVerificationTransaction(
+    buildDto: BuildCreateVerificationTransactionDto
+  ): Promise<BuildCreateVerificationTransactionResponse> {
+    try {
+      this.logger.log(`Building create verification transaction for wallet: ${buildDto.wallet}, source account: ${buildDto.sourceAccount}`);
+
+      // Call the stellar service to build the transaction
+      const result = await this.stellarService.buildCreateVerificationTransaction(
+        buildDto.wallet,
+        { type: buildDto.verificationType, points: buildDto.points },
+        buildDto.sourceAccount
+      );
+
+      if (result.success) {
+        this.logger.log(`Transaction built successfully for wallet: ${buildDto.wallet}`);
+        return {
+          success: true,
+          message: 'Transaction built successfully',
+          xdr: result.xdr,
+          sourceAccount: result.sourceAccount,
+          sequence: result.sequence,
+          fee: result.fee,
+          timebounds: result.timebounds,
+          footprint: result.footprint
+        };
+      } else {
+        return {
+          success: false,
+          message: `Failed to build transaction: ${result.error}`,
+          error: result.error
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to build create verification transaction for wallet: ${buildDto.wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to build transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
         error: error instanceof Error ? error.message : 'Unknown error'
       };
     }

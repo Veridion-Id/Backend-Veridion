@@ -4,7 +4,9 @@ import {
   BuildRegisterTransactionDto,
   BuildRegisterTransactionResponse,
   SubmitSignedTransactionDto,
-  SubmitSignedTransactionResponse
+  SubmitSignedTransactionResponse,
+  BuildCreateVerificationTransactionDto,
+  BuildCreateVerificationTransactionResponse
 } from '../../domain/entities/admin.entity';
 
 @Controller('admin')
@@ -26,5 +28,13 @@ export class AdminController {
     @Body() submitDto: SubmitSignedTransactionDto
   ): Promise<SubmitSignedTransactionResponse> {
     return this.adminService.submitSignedTransaction(submitDto);
+  }
+
+  @Post('create-verification')
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  async buildCreateVerificationTransaction(
+    @Body() buildDto: BuildCreateVerificationTransactionDto
+  ): Promise<BuildCreateVerificationTransactionResponse> {
+    return this.adminService.buildCreateVerificationTransaction(buildDto);
   }
 }
