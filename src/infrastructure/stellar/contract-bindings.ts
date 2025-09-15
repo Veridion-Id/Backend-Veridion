@@ -29,6 +29,15 @@ export interface GetScoreParams {
   wallet: string;
 }
 
+export interface Verification {
+  type: string;
+  points: number;
+}
+
+export interface GetVerificationsParams {
+  wallet: string;
+}
+
 export interface ContractResponse {
   success: boolean;
   transactionHash?: string;
@@ -148,7 +157,7 @@ export class ContractBindings {
    * @param params - The get score parameters
    * @returns Promise<number> - The score as a u32
    */
-  async getScore(params: GetScoreParams): Promise<number> {
+  async get_score(params: GetScoreParams): Promise<number> {
     this.logger.log('Mock contract bindings: get_score function called');
     this.logger.log(`Parameters: wallet=${params.wallet}`);
 
@@ -161,6 +170,40 @@ export class ContractBindings {
     this.logger.log(`Mock get_score successful. Score: ${score}`);
 
     return score;
+  }
+
+  /**
+   * Mock implementation of the get_verifications function
+   * This simulates calling the smart contract's get_verifications function
+   * The contract returns a Vec<Verification>
+   * 
+   * @param wallet - The wallet address
+   * @returns Promise<Verification[]> - Array of verifications, a Vec<Verification> in Soroban
+   */
+  async get_verifications(wallet: string): Promise<Verification[]> {
+    this.logger.log('Mock contract bindings: get_verifications function called');
+    this.logger.log(`Parameters: wallet=${wallet}`);
+
+    // Simulate contract execution
+    await this.simulateContractExecution();
+
+    // Mock verification data - in real implementation this would come from the contract
+    const mockVerifications: Verification[] = [
+      { type: 'identity_verification', points: 22 },
+      { type: 'address_verification', points: 10 },
+      { type: 'github_verification', points: 2 },
+      { type: 'email_verification', points: 5 }
+    ];
+
+    // Randomly select 2 or 4 verifications for demo purposes
+    const numVerifications = Math.floor(Math.random() * 2) + 2;
+    const selectedVerifications = mockVerifications
+      .sort(() => 0.5 - Math.random())
+      .slice(0, numVerifications);
+
+    this.logger.log(`Mock get_verifications successful. Found ${selectedVerifications.length} verifications`);
+
+    return selectedVerifications;
   }
 
   /**
