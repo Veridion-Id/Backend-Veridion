@@ -86,3 +86,11 @@ export interface BuildCreateVerificationTransactionResponse {
   footprint?: string;
   error?: string;
 }
+
+// API Key DTOs
+export interface ApiKeyResponse {
+  success: boolean;
+  message?: string;
+  apiKey?: string;
+  error?: string;
+}
