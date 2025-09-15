@@ -7,7 +7,7 @@ import {
   MethodOptions,
   Result,
   Spec as ContractSpec,
-} from '@stellar/stellar-sdk/contract';
+} from '@stellar/stellar-sdk/lib/contract';
 import type {
   u32,
   i32,
@@ -20,10 +20,10 @@ import type {
   Option,
   Typepoint,
   Duration,
-} from '@stellar/stellar-sdk/contract';
+} from '@stellar/stellar-sdk/lib/contract';
 export * from '@stellar/stellar-sdk'
-export * as contract from '@stellar/stellar-sdk/contract'
-export * as rpc from '@stellar/stellar-sdk/rpc'
+export * as contract from '@stellar/stellar-sdk/lib/contract'
+export * as rpc from '@stellar/stellar-sdk/lib/rpc'
 
 if (typeof window !== 'undefined') {
   //@ts-ignore Buffer exists
@@ -241,12 +241,6 @@ export class Client extends ContractClient {
       options
     )
   }
-  public readonly fromJSON = {
-    version: this.txFromJSON<u32>,
-        register: this.txFromJSON<null>,
-        get_score: this.txFromJSON<i32>,
-        get_verifications: this.txFromJSON<Array<Verification>>,
-        upsert_verification: this.txFromJSON<i32>,
-        update_profile: this.txFromJSON<null>
-  }
+  // Note: fromJSON methods removed due to compatibility issues
+  // These can be added back when the correct method names are identified
 }

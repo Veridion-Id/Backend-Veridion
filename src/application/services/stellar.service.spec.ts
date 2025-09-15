@@ -1,17 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { StellarService } from './stellar.service';
-import { ContractBindings } from '../../infrastructure/stellar/contract-bindings';
 import { 
   BuildTransactionResponse, 
-  SubmitTransactionResponse,
-  Verification
-} from '../../infrastructure/stellar/contract-bindings';
+  SubmitTransactionResponse
+} from './stellar.service';
+import { 
+  Verification,
+  VerificationType
+} from 'stellar-passport';
 
 describe('StellarService', () => {
   let service: StellarService;
   let configService: jest.Mocked<ConfigService>;
-  let contractBindings: jest.Mocked<ContractBindings>;
 
   beforeEach(async () => {
     const mockConfigService = {
@@ -25,14 +26,6 @@ describe('StellarService', () => {
       }),
     };
 
-    const mockContractBindings = {
-      get_score: jest.fn(),
-      get_verifications: jest.fn(),
-      buildRegisterTransaction: jest.fn(),
-      buildCreateVerificationTransaction: jest.fn(),
-      submitSignedTransaction: jest.fn(),
-    };
-
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StellarService,
@@ -40,16 +33,11 @@ describe('StellarService', () => {
           provide: ConfigService,
           useValue: mockConfigService,
         },
-        {
-          provide: ContractBindings,
-          useValue: mockContractBindings,
-        },
       ],
     }).compile();
 
     service = module.get<StellarService>(StellarService);
     configService = module.get(ConfigService);
-    contractBindings = module.get(ContractBindings);
 
     jest.clearAllMocks();
   });
@@ -260,8 +248,10 @@ describe('StellarService', () => {
     it('should build create verification transaction successfully', async () => {
       const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
       const verification: Verification = {
-        type: 'email',
+        issuer: 'test-issuer',
         points: 10,
+        timestamp: BigInt(Date.now()),
+        vtype: { tag: 'Custom' as const, values: ['email'] as const },
       };
       const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
 
@@ -297,8 +287,10 @@ describe('StellarService', () => {
     it('should handle invalid wallet address', async () => {
       const wallet = 'invalid-wallet';
       const verification: Verification = {
-        type: 'email',
+        issuer: 'test-issuer',
         points: 10,
+        timestamp: BigInt(Date.now()),
+        vtype: { tag: 'Custom' as const, values: ['email'] as const },
       };
       const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
 
@@ -314,8 +306,10 @@ describe('StellarService', () => {
     it('should handle invalid source account', async () => {
       const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
       const verification: Verification = {
-        type: 'email',
+        issuer: 'test-issuer',
         points: 10,
+        timestamp: BigInt(Date.now()),
+        vtype: { tag: 'Custom' as const, values: ['email'] as const },
       };
       const sourceAccount = 'invalid-source';
 
@@ -336,8 +330,10 @@ describe('StellarService', () => {
     it('should handle contract bindings failure', async () => {
       const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
       const verification: Verification = {
-        type: 'email',
+        issuer: 'test-issuer',
         points: 10,
+        timestamp: BigInt(Date.now()),
+        vtype: { tag: 'Custom' as const, values: ['email'] as const },
       };
       const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
 
@@ -362,8 +358,10 @@ describe('StellarService', () => {
     it('should handle contract bindings errors', async () => {
       const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
       const verification: Verification = {
-        type: 'email',
+        issuer: 'test-issuer',
         points: 10,
+        timestamp: BigInt(Date.now()),
+        vtype: { tag: 'Custom' as const, values: ['email'] as const },
       };
       const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
 
@@ -485,7 +483,7 @@ describe('StellarService', () => {
       });
 
       // Create a new instance to test the constructor behavior
-      const newService = new StellarService(configService, contractBindings);
+      const newService = new StellarService(configService);
       
       // Should not throw an error and should handle missing secret key gracefully
       expect(newService).toBeDefined();

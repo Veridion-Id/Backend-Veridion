@@ -62,7 +62,14 @@ export class PlatformService {
       }
 
       // Call the Stellar smart contract - returns Vec<Verification>
-      const verifications = await this.stellarService.getVerifications(wallet);
+      const stellarVerifications = await this.stellarService.getVerifications(wallet);
+
+      // Convert new Verification format to old format for backward compatibility
+      const verifications = stellarVerifications.map(verification => ({
+        type: this.convertVerificationTypeToString(verification.vtype),
+        points: verification.points,
+        timestamp: verification.timestamp.toString()
+      }));
 
       this.logger.log(`Verifications retrieved successfully for wallet: ${wallet}, there were ${verifications.length} verifications`);
       return {
@@ -154,6 +161,27 @@ export class PlatformService {
         message: `Failed to verify if human: ${error instanceof Error ? error.message : 'Unknown error'}`
       };
     }
+  }
+
+  /**
+   * Convert VerificationType to string for backward compatibility
+   */
+  private convertVerificationTypeToString(vtype: any): string {
+    if (typeof vtype === 'object' && vtype !== null && 'tag' in vtype) {
+      switch (vtype.tag) {
+        case 'Over18':
+          return 'over18';
+        case 'Twitter':
+          return 'twitter';
+        case 'GitHub':
+          return 'github';
+        case 'Custom':
+          return vtype.values && vtype.values[0] ? vtype.values[0] : 'custom';
+        default:
+          return 'unknown';
+      }
+    }
+    return 'unknown';
   }
 }
 

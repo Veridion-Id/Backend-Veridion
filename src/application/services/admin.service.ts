@@ -119,10 +119,18 @@ export class AdminService {
     try {
       this.logger.log(`Building create verification transaction for wallet: ${buildDto.wallet}, source account: ${buildDto.sourceAccount}`);
 
+      // Create a verification object compatible with the new interface
+      const verification = {
+        issuer: 'admin', // Default issuer for admin-created verifications
+        points: buildDto.points,
+        timestamp: BigInt(Date.now()),
+        vtype: this.convertToVerificationType(buildDto.verificationType)
+      };
+
       // Call the stellar service to build the transaction
       const result = await this.stellarService.buildCreateVerificationTransaction(
         buildDto.wallet,
-        { type: buildDto.verificationType, points: buildDto.points },
+        verification,
         buildDto.sourceAccount
       );
 
@@ -236,6 +244,23 @@ export class AdminService {
         message: `Failed to generate API key: ${error instanceof Error ? error.message : 'Unknown error'}`,
         error: error instanceof Error ? error.message : 'Unknown error'
       };
+    }
+  }
+
+  /**
+   * Convert string verification type to VerificationType enum
+   */
+  private convertToVerificationType(type: string): any {
+    switch (type.toLowerCase()) {
+      case 'over18':
+        return { tag: 'Over18', values: undefined };
+      case 'twitter':
+        return { tag: 'Twitter', values: undefined };
+      case 'github':
+        return { tag: 'GitHub', values: undefined };
+      default:
+        // For custom types, wrap in Custom
+        return { tag: 'Custom', values: [type] };
     }
   }
 

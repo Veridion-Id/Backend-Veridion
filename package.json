@@ -40,7 +40,8 @@
     "class-validator": "^0.14.2",
     "firebase-admin": "^13.5.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "stellar-passport": "file:packages/stellar-passport"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.10",

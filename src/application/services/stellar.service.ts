@@ -10,12 +10,32 @@ import {
   Horizon
 } from '@stellar/stellar-sdk';
 import { 
-  ContractBindings, 
-  BuildTransactionResponse, 
-  SubmitTransactionResponse,
+  Client as StellarPassportClient,
   Verification,
-  CreateVerificationParams
-} from '../../infrastructure/stellar/contract-bindings';
+  VerificationType,
+  networks
+} from 'stellar-passport';
+
+export interface BuildTransactionResponse {
+  success: boolean;
+  xdr?: string;
+  sourceAccount?: string;
+  sequence?: string;
+  fee?: string;
+  timebounds?: {
+    minTime: string;
+    maxTime: string;
+  };
+  footprint?: string;
+  error?: string;
+}
+
+export interface SubmitTransactionResponse {
+  success: boolean;
+  transactionHash?: string;
+  resultMeta?: string;
+  error?: string;
+}
 
 @Injectable()
 export class StellarService {
@@ -24,10 +44,10 @@ export class StellarService {
   private networkPassphrase: string;
   private contractId: string;
   private adminKeypair: Keypair;
+  private stellarPassportClient: StellarPassportClient;
 
   constructor(
-    private configService: ConfigService,
-    private contractBindings: ContractBindings
+    private configService: ConfigService
   ) {
     // Initialize Stellar server and configuration
     const network = this.configService.get<string>('STELLAR_NETWORK', 'testnet');
@@ -36,7 +56,7 @@ export class StellarService {
     this.server = new Horizon.Server('https://horizon-testnet.stellar.org'); //testnet
 
     // Contract ID and admin keypair from environment variables
-    this.contractId = this.configService.get<string>('STELLAR_CONTRACT_ID', '');
+    this.contractId = this.configService.get<string>('STELLAR_CONTRACT_ID', networks.testnet.contractId);
     const adminSecretKey = this.configService.get<string>('STELLAR_ADMIN_SECRET_KEY', '');
     
     if (adminSecretKey) {
@@ -44,24 +64,38 @@ export class StellarService {
     } else {
       this.logger.warn('STELLAR_ADMIN_SECRET_KEY not provided, using mock mode'); //created a mock mode if there is no env variables or no contract yet
     }
+
+    // Initialize Stellar Passport client
+    this.stellarPassportClient = new StellarPassportClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: 'https://soroban-testnet.stellar.org',
+    });
   }
 
 
   /**
    * Get user score from the Stellar smart contract
-   * Uses mock bindings until real bindings are available
+   * Uses actual stellar-passport bindings
    * The contract returns a u32 value directly
    */
   async getScore(wallet: string): Promise<number> {
     try {
       this.logger.log(`Attempting to get score for wallet: ${wallet}`);
 
-      // Use the contract bindings (mock for now)
-      // The contract returns a u32 value directly
-      const score = await this.contractBindings.get_score({ wallet });
-
-      this.logger.log(`Score retrieved successfully for wallet: ${wallet}, score: ${score}`);
-      return score;
+      // Use the actual contract bindings from stellar-passport
+      const assembledTransaction = await this.stellarPassportClient.get_score({ wallet });
+      
+      // Execute the transaction to get the result
+      const result = await assembledTransaction.simulate();
+      
+      if (result.result) {
+        const score = result.result as number;
+        this.logger.log(`Score retrieved successfully for wallet: ${wallet}, score: ${score}`);
+        return score;
+      } else {
+        throw new Error('No result returned from contract');
+      }
 
     } catch (error) {
       this.logger.error('Error getting score from Stellar:', error);
@@ -71,7 +105,7 @@ export class StellarService {
 
   /**
    * Get user verifications from the Stellar smart contract
-   * Uses mock bindings until real bindings are available
+   * Uses actual stellar-passport bindings
    * The contract returns a Vec<Verification>
    */
   async getVerifications(wallet: string): Promise<Verification[]> {
@@ -83,12 +117,19 @@ export class StellarService {
         throw new Error('Invalid wallet address format');
       }
 
-      // Use the contract bindings (mock for now)
-      // The contract returns a Vec<Verification>
-      const verifications = await this.contractBindings.get_verifications(wallet);
-
-      this.logger.log(`Verifications retrieved successfully for wallet: ${wallet}, count: ${verifications.length}`);
-      return verifications;
+      // Use the actual contract bindings from stellar-passport
+      const assembledTransaction = await this.stellarPassportClient.get_verifications({ wallet });
+      
+      // Execute the transaction to get the result
+      const result = await assembledTransaction.simulate();
+      
+      if (result.result) {
+        const verifications = result.result as Verification[];
+        this.logger.log(`Verifications retrieved successfully for wallet: ${wallet}, count: ${verifications.length}`);
+        return verifications;
+      } else {
+        throw new Error('No result returned from contract');
+      }
 
     } catch (error) {
       this.logger.error('Error getting verifications from Stellar:', error);
@@ -119,20 +160,34 @@ export class StellarService {
         throw new Error('Invalid source account format');
       }
 
-      // Use contract bindings to build the transaction
-      const result = await this.contractBindings.buildRegisterTransaction(
+      // Use actual contract bindings to build the transaction
+      const assembledTransaction = await this.stellarPassportClient.register(
         { wallet, name, surnames },
-        sourceAccount,
-        this.networkPassphrase,
-        this.contractId
+        { simulate: false } // Don't simulate, just build
       );
 
-      if (result.success) {
-        this.logger.log(`Transaction built successfully for wallet: ${wallet}`);
-        return result;
-      } else {
-        throw new Error(result.error || 'Failed to build transaction');
-      }
+      // Get the transaction details
+      const xdrString = assembledTransaction.toXDR();
+      // Note: AssembledTransaction doesn't expose sequence, fee, timeBounds directly
+      // These would need to be extracted from the transaction if needed
+      const sequence = '0'; // Placeholder - would need to extract from transaction
+      const fee = '100'; // Placeholder - would need to extract from transaction
+      const timebounds = undefined; // Placeholder - would need to extract from transaction
+
+      this.logger.log(`Transaction built successfully for wallet: ${wallet}`);
+
+      return {
+        success: true,
+        xdr: xdrString,
+        sourceAccount: sourceAccount,
+        sequence: sequence,
+        fee: fee.toString(),
+        timebounds: timebounds ? {
+          minTime: timebounds.minTime.toString(),
+          maxTime: timebounds.maxTime.toString()
+        } : undefined,
+        footprint: undefined // TODO: Add proper Soroban footprint when available
+      };
 
     } catch (error) {
       this.logger.error('Error building register transaction:', error);
@@ -165,20 +220,37 @@ export class StellarService {
         throw new Error('Invalid source account format');
       }
 
-      // Use contract bindings to build the transaction
-      const result = await this.contractBindings.buildCreateVerificationTransaction(
-        { wallet, verification },
-        sourceAccount,
-        this.networkPassphrase,
-        this.contractId
+      // Convert the verification to the expected format for the contract
+      const verificationType: VerificationType = this.convertToVerificationType(verification.vtype);
+
+      // Use actual contract bindings to build the transaction
+      const assembledTransaction = await this.stellarPassportClient.upsert_verification(
+        { wallet, vtype: verificationType, points: verification.points },
+        { simulate: false } // Don't simulate, just build
       );
 
-      if (result.success) {
-        this.logger.log(`Transaction built successfully for wallet: ${wallet}`);
-        return result;
-      } else {
-        throw new Error(result.error || 'Failed to build transaction');
-      }
+      // Get the transaction details
+      const xdrString = assembledTransaction.toXDR();
+      // Note: AssembledTransaction doesn't expose sequence, fee, timeBounds directly
+      // These would need to be extracted from the transaction if needed
+      const sequence = '0'; // Placeholder - would need to extract from transaction
+      const fee = '100'; // Placeholder - would need to extract from transaction
+      const timebounds = undefined; // Placeholder - would need to extract from transaction
+
+      this.logger.log(`Transaction built successfully for wallet: ${wallet}`);
+
+      return {
+        success: true,
+        xdr: xdrString,
+        sourceAccount: sourceAccount,
+        sequence: sequence,
+        fee: fee.toString(),
+        timebounds: timebounds ? {
+          minTime: timebounds.minTime.toString(),
+          maxTime: timebounds.maxTime.toString()
+        } : undefined,
+        footprint: undefined // TODO: Add proper Soroban footprint when available
+      };
 
     } catch (error) {
       this.logger.error('Error building create verification transaction:', error);
@@ -197,18 +269,19 @@ export class StellarService {
     try {
       this.logger.log('Submitting signed transaction');
 
-      // Use contract bindings to submit the transaction
-      const result = await this.contractBindings.submitSignedTransaction(
-        signedXdr,
-        this.networkPassphrase
-      );
+      // Parse the signed transaction
+      const transaction = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
 
-      if (result.success) {
-        this.logger.log(`Transaction submitted successfully. Hash: ${result.transactionHash}`);
-        return result;
-      } else {
-        throw new Error(result.error || 'Failed to submit transaction');
-      }
+      // Submit to Horizon
+      const result = await this.server.submitTransaction(transaction);
+
+      this.logger.log(`Transaction submitted successfully. Hash: ${result.hash}`);
+
+      return {
+        success: true,
+        transactionHash: result.hash,
+        resultMeta: undefined // TODO: Add proper result meta when available
+      };
 
     } catch (error) {
       this.logger.error('Error submitting signed transaction:', error);
@@ -221,8 +294,31 @@ export class StellarService {
 
 
   /**
+   * Convert string verification type to VerificationType enum
+   */
+  private convertToVerificationType(type: string | VerificationType): VerificationType {
+    // If it's already a VerificationType, return it
+    if (typeof type === 'object' && type !== null && 'tag' in type) {
+      return type as VerificationType;
+    }
+    
+    // Convert string to VerificationType
+    const typeStr = (type as string).toLowerCase();
+    switch (typeStr) {
+      case 'over18':
+        return { tag: 'Over18', values: undefined };
+      case 'twitter':
+        return { tag: 'Twitter', values: undefined };
+      case 'github':
+        return { tag: 'GitHub', values: undefined };
+      default:
+        // For custom types, wrap in Custom
+        return { tag: 'Custom', values: [typeStr] };
+    }
+  }
+
+  /**
    * Validate a Stellar wallet address
-   * TODO: actually use this function for wallet address validation
    */
   validateWalletAddress(wallet: string): boolean {
     try {
