@@ -144,6 +144,7 @@ export class StellarService {
     }
   }
 
+
   /**
    * Validate a Stellar wallet address
    * TODO: actually use this function for wallet address validation
