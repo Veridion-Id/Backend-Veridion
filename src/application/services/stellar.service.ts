@@ -12,7 +12,8 @@ import {
 import { 
   ContractBindings, 
   BuildTransactionResponse, 
-  SubmitTransactionResponse 
+  SubmitTransactionResponse,
+  Verification
 } from '../../infrastructure/stellar/contract-bindings';
 
 @Injectable()
@@ -64,6 +65,33 @@ export class StellarService {
     } catch (error) {
       this.logger.error('Error getting score from Stellar:', error);
       throw new Error(`Failed to get score: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Get user verifications from the Stellar smart contract
+   * Uses mock bindings until real bindings are available
+   * The contract returns a Vec<Verification>
+   */
+  async getVerifications(wallet: string): Promise<Verification[]> {
+    try {
+      this.logger.log(`Attempting to get verifications for wallet: ${wallet}`);
+
+      // Validate wallet address format
+      if (!this.validateWalletAddress(wallet)) {
+        throw new Error('Invalid wallet address format');
+      }
+
+      // Use the contract bindings (mock for now)
+      // The contract returns a Vec<Verification>
+      const verifications = await this.contractBindings.get_verifications(wallet);
+
+      this.logger.log(`Verifications retrieved successfully for wallet: ${wallet}, count: ${verifications.length}`);
+      return verifications;
+
+    } catch (error) {
+      this.logger.error('Error getting verifications from Stellar:', error);
+      throw new Error(`Failed to get verifications: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
