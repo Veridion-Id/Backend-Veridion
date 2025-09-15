@@ -1,0 +1,116 @@
+alwaysApply: true
+
+# ==== GENERAL ====
+- Always use **npm** as the package manager (never pnpm or yarn).
+- The project is a **NestJS API** in TypeScript with `"strict": true`.
+- Generate `.env.example` whenever new environment variables are added.
+- Swagger docs must be exposed at `/docs`.
+
+# ==== PROJECT STRUCTURE ====
+- Use the following layered architecture:
+  src/
+    config/           # configuration & env validation
+    core/             # logger, errors, utils
+    domain/           # entities, value objects, ports/interfaces
+    application/      # services, use cases
+    infrastructure/   # external services (Stellar SDK, DB, cache)
+    interfaces/       # controllers, DTOs, presenters
+    modules/          # feature modules that bind everything
+  packages/           # TypeScript bindings for smart contracts (generated or manual)
+
+- Controllers only live in `interfaces/`.
+- `domain/` must remain framework-agnostic (no NestJS imports).
+- Each module should be self-contained: `domain + application + infra + interface`.
+- The `packages/` directory is reserved for generated **TypeScript contract bindings** (e.g., Soroban contract bindings).  
+  - These bindings must not be edited manually.  
+  - Application/Infrastructure should import bindings from here.
+
+# ==== ROUTES (MANDATORY) ====
+- There must be exactly **three top-level routes**:
+  - `/kyc`
+  - `/health`
+  - `/pass`
+- All other endpoints must exist **under one of these three groups**.  
+  Example: `/kyc/verify`, `/health/status`, `/pass/create`.
+
+# ==== STELLAR ====
+- Use the official `@stellar/stellar-sdk`.
+- All Stellar logic must live in `src/infrastructure/stellar/stellar.service.ts`.
+- Expose clean ports under `src/domain/ports`.
+- Never log or expose secret keys.
+- Default network is **testnet**, configurable via `.env`.
+
+# ==== DEPENDENCIES ====
+- Install only with `npm install`.
+- Keep dependencies minimal and justified.
+
+# ==== STYLE ====
+- Follow Prettier defaults: single quotes, no semicolons, trailing commas.
+- Validate all DTOs with `class-validator` + `class-transformer`.
+- Controllers must remain thin; business logic goes into services.
+- Always add Swagger decorators to controllers.
+
+# ==== TESTING ====
+- Use Jest (default in NestJS projects).
+- Do not make live calls to Horizon or Soroban in tests → mock responses.
+
+# ==== COMMITS ====
+- Use Conventional Commits style (`feat:`, `fix:`, `chore:`, etc.).
+alwaysApply: true
+
+# ==== GENERAL ====
+- Always use **npm** as the package manager (never pnpm or yarn).
+- The project is a **NestJS API** in TypeScript with `"strict": true`.
+- Generate `.env.example` whenever new environment variables are added.
+- Swagger docs must be exposed at `/docs`.
+
+# ==== PROJECT STRUCTURE ====
+- Use the following layered architecture:
+  src/
+    config/           # configuration & env validation
+    core/             # logger, errors, utils
+    domain/           # entities, value objects, ports/interfaces
+    application/      # services, use cases
+    infrastructure/   # external services (Stellar SDK, DB, cache)
+    interfaces/       # controllers, DTOs, presenters
+    modules/          # feature modules that bind everything
+  packages/           # TypeScript bindings for smart contracts (generated or manual)
+
+- Controllers only live in `interfaces/`.
+- `domain/` must remain framework-agnostic (no NestJS imports).
+- Each module should be self-contained: `domain + application + infra + interface`.
+- The `packages/` directory is reserved for generated **TypeScript contract bindings** (e.g., Soroban contract bindings).  
+  - These bindings must not be edited manually.  
+  - Application/Infrastructure should import bindings from here.
+
+# ==== ROUTES (MANDATORY) ====
+- There must be exactly **three top-level routes**:
+  - `/kyc`
+  - `/health`
+  - `/pass`
+- All other endpoints must exist **under one of these three groups**.  
+  Example: `/kyc/verify`, `/health/status`, `/pass/create`.
+
+# ==== STELLAR ====
+- Use the official `@stellar/stellar-sdk`.
+- All Stellar logic must live in `src/infrastructure/stellar/stellar.service.ts`.
+- Expose clean ports under `src/domain/ports`.
+- Never log or expose secret keys.
+- Default network is **testnet**, configurable via `.env`.
+
+# ==== DEPENDENCIES ====
+- Install only with `npm install`.
+- Keep dependencies minimal and justified.
+
+# ==== STYLE ====
+- Follow Prettier defaults: single quotes, no semicolons, trailing commas.
+- Validate all DTOs with `class-validator` + `class-transformer`.
+- Controllers must remain thin; business logic goes into services.
+- Always add Swagger decorators to controllers.
+
+# ==== TESTING ====
+- Use Jest (default in NestJS projects).
+- Do not make live calls to Horizon or Soroban in tests → mock responses.
+
+# ==== COMMITS ====
+- Use Conventional Commits style (`feat:`, `fix:`, `chore:`, etc.).
