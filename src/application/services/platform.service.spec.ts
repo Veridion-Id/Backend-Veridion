@@ -97,14 +97,16 @@ describe('PlatformService', () => {
       const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
       const expectedVerifications = [
         {
-          type: 'email',
+          issuer: 'test-issuer',
           points: 10,
-          timestamp: '2023-01-01T00:00:00Z',
+          timestamp: BigInt(Date.now()),
+          vtype: { tag: 'Custom' as const, values: ['email'] as const },
         },
         {
-          type: 'phone',
+          issuer: 'test-issuer',
           points: 15,
-          timestamp: '2023-01-02T00:00:00Z',
+          timestamp: BigInt(Date.now()),
+          vtype: { tag: 'Custom' as const, values: ['phone'] as const },
         },
       ];
 

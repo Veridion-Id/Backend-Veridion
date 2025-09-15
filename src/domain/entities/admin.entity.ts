@@ -49,6 +49,7 @@ export interface SubmitSignedTransactionResponse {
   transactionHash?: string;
   resultMeta?: string;
   error?: string;
+  rebuiltXdr?: string; // New XDR with updated sequence number
 }
 
 // Create verification DTOs

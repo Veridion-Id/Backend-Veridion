@@ -29,6 +29,11 @@ export class PlatformService {
       // Call the Stellar smart contract - returns u32 directly
       const score = await this.stellarService.getScore(wallet);
 
+      // Ensure score is a number
+      if (typeof score !== 'number') {
+        throw new Error(`Invalid score type: expected number, got ${typeof score}`);
+      }
+
       this.logger.log(`Score retrieved successfully for wallet: ${wallet}, score: ${score}`);
       return {
         score,
@@ -38,9 +43,21 @@ export class PlatformService {
 
     } catch (error) {
       this.logger.error(`Failed to get score for wallet: ${wallet}`, error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Handle specific contract errors more gracefully
+      if (errorMessage.includes('User is not registered')) {
+        return {
+          success: true,
+          score: 0,
+          message: 'User is not registered. Score is 0.'
+        };
+      }
+      
       return {
         success: false,
-        message: `Failed to get score: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Failed to get score: ${errorMessage}`
       };
     }
   }
@@ -62,7 +79,14 @@ export class PlatformService {
       }
 
       // Call the Stellar smart contract - returns Vec<Verification>
-      const verifications = await this.stellarService.getVerifications(wallet);
+      const stellarVerifications = await this.stellarService.getVerifications(wallet);
+
+      // Convert new Verification format to old format for backward compatibility
+      const verifications = stellarVerifications.map(verification => ({
+        type: this.convertVerificationTypeToString(verification.vtype),
+        points: verification.points,
+        timestamp: verification.timestamp.toString()
+      }));
 
       this.logger.log(`Verifications retrieved successfully for wallet: ${wallet}, there were ${verifications.length} verifications`);
       return {
@@ -73,9 +97,21 @@ export class PlatformService {
 
     } catch (error) {
       this.logger.error(`Failed to get verifications for wallet: ${wallet}`, error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Handle specific contract errors more gracefully
+      if (errorMessage.includes('User is not registered')) {
+        return {
+          success: true,
+          verifications: [],
+          message: 'User is not registered. No verifications found.'
+        };
+      }
+      
       return {
         success: false,
-        message: `Failed to get verifications: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Failed to get verifications: ${errorMessage}`
       };
     }
   }
@@ -100,6 +136,11 @@ export class PlatformService {
       // Get the user's score from the Stellar smart contract
       const score = await this.stellarService.getScore(wallet);
 
+      // Ensure score is a number
+      if (typeof score !== 'number') {
+        throw new Error(`Invalid score type: expected number, got ${typeof score}`);
+      }
+
       // Determine if the user is human based on the threshold
       const isHuman = score >= this.HUMAN_THRESHOLD;
 
@@ -114,9 +155,22 @@ export class PlatformService {
 
     } catch (error) {
       this.logger.error(`Failed to check if wallet is human: ${wallet}`, error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Handle specific contract errors more gracefully
+      if (errorMessage.includes('User is not registered')) {
+        return {
+          isHuman: false,
+          score: 0,
+          success: true,
+          message: 'User is not registered. Score is 0, not human.'
+        };
+      }
+      
       return {
         success: false,
-        message: `Failed to verify if human: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Failed to verify if human: ${errorMessage}`
       };
     }
   }
@@ -149,11 +203,44 @@ export class PlatformService {
 
     } catch (error) {
       this.logger.error(`Failed to check if wallet is human (no score): ${wallet}`, error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Handle specific contract errors more gracefully
+      if (errorMessage.includes('User is not registered')) {
+        return {
+          isHuman: false,
+          success: true,
+          message: 'User is not registered. Not human.'
+        };
+      }
+      
       return {
         success: false,
-        message: `Failed to verify if human: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Failed to verify if human: ${errorMessage}`
       };
     }
+  }
+
+  /**
+   * Convert VerificationType to string for backward compatibility
+   */
+  private convertVerificationTypeToString(vtype: any): string {
+    if (typeof vtype === 'object' && vtype !== null && 'tag' in vtype) {
+      switch (vtype.tag) {
+        case 'Over18':
+          return 'over18';
+        case 'Twitter':
+          return 'twitter';
+        case 'GitHub':
+          return 'github';
+        case 'Custom':
+          return vtype.values && vtype.values[0] ? vtype.values[0] : 'custom';
+        default:
+          return 'unknown';
+      }
+    }
+    return 'unknown';
   }
 }
 

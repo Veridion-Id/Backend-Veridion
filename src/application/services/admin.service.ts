@@ -39,7 +39,7 @@ export class AdminService {
         buildDto.surnames,
         buildDto.sourceAccount
       );
-
+      this.logger.log(buildDto);
       if (result.success) {
         this.logger.log(`Transaction built successfully for wallet: ${buildDto.wallet}`);
         return {
@@ -92,10 +92,16 @@ export class AdminService {
           resultMeta: result.resultMeta
         };
       } else {
+        // Provide helpful error message for sequence issues
+        const message = result.error?.includes('sequence') && result.error?.includes('outdated')
+          ? `Failed to submit transaction: ${result.error}. Please call the build endpoint again to get a new transaction with the current sequence number.`
+          : `Failed to submit transaction: ${result.error}`;
+        
         return {
           success: false,
-          message: `Failed to submit transaction: ${result.error}`,
-          error: result.error
+          message: message,
+          error: result.error,
+          rebuiltXdr: result.rebuiltXdr // Pass through the rebuilt XDR if available
         };
       }
 
@@ -119,10 +125,18 @@ export class AdminService {
     try {
       this.logger.log(`Building create verification transaction for wallet: ${buildDto.wallet}, source account: ${buildDto.sourceAccount}`);
 
+      // Create a verification object compatible with the new interface
+      const verification = {
+        issuer: 'admin', // Default issuer for admin-created verifications
+        points: buildDto.points,
+        timestamp: BigInt(Date.now()),
+        vtype: this.convertToVerificationType(buildDto.verificationType)
+      };
+
       // Call the stellar service to build the transaction
       const result = await this.stellarService.buildCreateVerificationTransaction(
         buildDto.wallet,
-        { type: buildDto.verificationType, points: buildDto.points },
+        verification,
         buildDto.sourceAccount
       );
 
@@ -237,6 +251,30 @@ export class AdminService {
         error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
+  }
+
+  /**
+   * Convert string verification type to VerificationType enum
+   */
+  private convertToVerificationType(type: string): any {
+    switch (type.toLowerCase()) {
+      case 'over18':
+        return { tag: 'Over18', values: undefined };
+      case 'twitter':
+        return { tag: 'Twitter', values: undefined };
+      case 'github':
+        return { tag: 'GitHub', values: undefined };
+      default:
+        // For custom types, wrap in Custom
+        return { tag: 'Custom', values: [type] };
+    }
+  }
+
+  /**
+   * Get the current sequence number for an account
+   */
+  async getAccountSequence(accountId: string): Promise<{ sequence: string; success: boolean; error?: string }> {
+    return this.stellarService.getAccountSequence(accountId);
   }
 
 }
