@@ -83,14 +83,6 @@ alwaysApply: true
   - These bindings must not be edited manually.  
   - Application/Infrastructure should import bindings from here.
 
-# ==== ROUTES (MANDATORY) ====
-- There must be exactly **three top-level routes**:
-  - `/kyc`
-  - `/health`
-  - `/pass`
-- All other endpoints must exist **under one of these three groups**.  
-  Example: `/kyc/verify`, `/health/status`, `/pass/create`.
-
 # ==== STELLAR ====
 - Use the official `@stellar/stellar-sdk`.
 - All Stellar logic must live in `src/infrastructure/stellar/stellar.service.ts`.
