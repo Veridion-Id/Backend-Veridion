@@ -38,6 +38,11 @@ export interface GetVerificationsParams {
   wallet: string;
 }
 
+export interface CreateVerificationParams {
+  wallet: string;
+  verification: Verification;
+}
+
 export interface ContractResponse {
   success: boolean;
   transactionHash?: string;
@@ -130,6 +135,20 @@ export class ContractBindings {
   }
 
   /**
+   * Validate the create verification parameters
+   */
+  private validateCreateVerificationParams(params: CreateVerificationParams): boolean {
+    return !!(
+      params.wallet &&
+      params.verification &&
+      params.verification.type &&
+      typeof params.verification.points === 'number' &&
+      params.verification.points >= 0 &&
+      params.wallet.length === 56 // Stellar wallet address length
+    );
+  }
+
+  /**
    * Simulate contract execution time
    */
   private async simulateContractExecution(): Promise<void> {
@@ -204,6 +223,48 @@ export class ContractBindings {
     this.logger.log(`Mock get_verifications successful. Found ${selectedVerifications.length} verifications`);
 
     return selectedVerifications;
+  }
+
+  /**
+   * Mock implementation of the create_verification function
+   * This simulates calling the smart contract's create_verification function
+   * 
+   * @param params - The create verification parameters
+   * @returns Promise<ContractResponse> - The contract response
+   */
+  async create_verification(params: CreateVerificationParams): Promise<ContractResponse> {
+    this.logger.log('Mock contract bindings: create_verification function called');
+    this.logger.log(`Parameters: wallet=${params.wallet}, verification=${JSON.stringify(params.verification)}`);
+
+    try {
+      // Simulate contract validation
+      if (!this.validateCreateVerificationParams(params)) {
+        return {
+          success: false,
+          error: 'Invalid parameters provided'
+        };
+      }
+
+      // Simulate contract execution
+      await this.simulateContractExecution();
+
+      // Generate mock transaction hash
+      const transactionHash = this.generateMockTransactionHash();
+
+      this.logger.log(`Mock create_verification successful. Transaction hash: ${transactionHash}`);
+
+      return {
+        success: true,
+        transactionHash
+      };
+
+    } catch (error) {
+      this.logger.error('Mock contract execution failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
   }
 
   /**
@@ -285,6 +346,100 @@ export class ContractBindings {
 
     } catch (error) {
       this.logger.error('Failed to build register transaction:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Build a transaction for the create_verification function (BUILD phase)
+   * This creates an unsigned XDR transaction that the client can sign
+   */
+  async buildCreateVerificationTransaction(
+    params: CreateVerificationParams,
+    sourceAccount: string,
+    networkPassphrase: string,
+    contractId: string
+  ): Promise<BuildTransactionResponse> {
+    this.logger.log('Building create_verification transaction');
+    this.logger.log(`Parameters: wallet=${params.wallet}, verification=${JSON.stringify(params.verification)}`);
+
+    try {
+      // Validate parameters
+      if (!this.validateCreateVerificationParams(params)) {
+        return {
+          success: false,
+          error: 'Invalid parameters provided'
+        };
+      }
+
+      // Validate source account
+      if (!this.validateWalletAddress(sourceAccount)) {
+        return {
+          success: false,
+          error: 'Invalid source account address'
+        };
+      }
+
+      // Create keypair from source account
+      const sourceKeypair = Keypair.fromPublicKey(sourceAccount);
+
+      // Get account info from Horizon
+      const server = new Horizon.Server('https://horizon-testnet.stellar.org');
+      const account = await server.loadAccount(sourceAccount);
+
+      // Build the transaction
+      const transaction = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: networkPassphrase,
+      })
+        .addOperation(
+          Operation.invokeContractFunction({
+            contract: contractId,
+            function: 'create_verification',
+            args: [
+              xdr.ScVal.scvString(params.wallet),
+              xdr.ScVal.scvMap([
+                new xdr.ScMapEntry({
+                  key: xdr.ScVal.scvString('type'),
+                  val: xdr.ScVal.scvString(params.verification.type)
+                }),
+                new xdr.ScMapEntry({
+                  key: xdr.ScVal.scvString('points'),
+                  val: xdr.ScVal.scvU32(params.verification.points)
+                })
+              ])
+            ]
+          })
+        )
+        .setTimeout(30) // 30 seconds timeout
+        .build();
+
+      // Get transaction details
+      const xdrString = transaction.toXDR();
+      const sequence = account.sequenceNumber();
+      const fee = transaction.fee;
+      const timebounds = transaction.timeBounds;
+
+      this.logger.log(`Transaction built successfully. Sequence: ${sequence}, Fee: ${fee}`);
+
+      return {
+        success: true,
+        xdr: xdrString,
+        sourceAccount: sourceAccount,
+        sequence: sequence,
+        fee: fee.toString(),
+        timebounds: timebounds ? {
+          minTime: timebounds.minTime.toString(),
+          maxTime: timebounds.maxTime.toString()
+        } : undefined,
+        footprint: undefined // TODO: Add proper Soroban footprint when available
+      };
+
+    } catch (error) {
+      this.logger.error('Failed to build create_verification transaction:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'

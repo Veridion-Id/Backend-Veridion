@@ -1,11 +1,15 @@
-import { Controller, Post, Body, ValidationPipe, UsePipes } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, ValidationPipe, UsePipes } from '@nestjs/common';
 import { AdminService } from '../../application/services/admin.service';
 import { 
   BuildRegisterTransactionDto,
   BuildRegisterTransactionResponse,
   SubmitSignedTransactionDto,
-  SubmitSignedTransactionResponse
+  SubmitSignedTransactionResponse,
+  BuildCreateVerificationTransactionDto,
+  BuildCreateVerificationTransactionResponse,
+  ApiKeyResponse
 } from '../../domain/entities/admin.entity';
+import { ApiKeyResponse as HumanApiKeyResponse } from '../../domain/entities/api-key.entity';
 
 @Controller('admin')
 export class AdminController {
@@ -26,5 +30,23 @@ export class AdminController {
     @Body() submitDto: SubmitSignedTransactionDto
   ): Promise<SubmitSignedTransactionResponse> {
     return this.adminService.submitSignedTransaction(submitDto);
+  }
+
+  @Post('create-verification')
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  async buildCreateVerificationTransaction(
+    @Body() buildDto: BuildCreateVerificationTransactionDto
+  ): Promise<BuildCreateVerificationTransactionResponse> {
+    return this.adminService.buildCreateVerificationTransaction(buildDto);
+  }
+
+  @Get('api-key')
+  async generateApiKey(): Promise<ApiKeyResponse> {
+    return this.adminService.generateApiKey();
+  }
+
+  @Get('api-key-hm/:wallet')
+  async generateApiKeyForHuman(@Param('wallet') wallet: string): Promise<HumanApiKeyResponse> {
+    return this.adminService.generateApiKeyForHuman(wallet);
   }
 }

@@ -13,7 +13,8 @@ import {
   ContractBindings, 
   BuildTransactionResponse, 
   SubmitTransactionResponse,
-  Verification
+  Verification,
+  CreateVerificationParams
 } from '../../infrastructure/stellar/contract-bindings';
 
 @Injectable()
@@ -135,6 +136,52 @@ export class StellarService {
 
     } catch (error) {
       this.logger.error('Error building register transaction:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Build a transaction for creating verification (BUILD phase)
+   * Creates an unsigned XDR transaction that the client can sign
+   */
+  async buildCreateVerificationTransaction(
+    wallet: string,
+    verification: Verification,
+    sourceAccount: string
+  ): Promise<BuildTransactionResponse> {
+    try {
+      this.logger.log(`Building create verification transaction for wallet: ${wallet}, source: ${sourceAccount}`);
+
+      // Validate wallet address format
+      if (!this.validateWalletAddress(wallet)) {
+        throw new Error('Invalid wallet address format');
+      }
+
+      // Validate source account format
+      if (!this.validateWalletAddress(sourceAccount)) {
+        throw new Error('Invalid source account format');
+      }
+
+      // Use contract bindings to build the transaction
+      const result = await this.contractBindings.buildCreateVerificationTransaction(
+        { wallet, verification },
+        sourceAccount,
+        this.networkPassphrase,
+        this.contractId
+      );
+
+      if (result.success) {
+        this.logger.log(`Transaction built successfully for wallet: ${wallet}`);
+        return result;
+      } else {
+        throw new Error(result.error || 'Failed to build transaction');
+      }
+
+    } catch (error) {
+      this.logger.error('Error building create verification transaction:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'
