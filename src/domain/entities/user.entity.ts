@@ -1,18 +1,30 @@
-export class User {
-  constructor(
-    public readonly id: string,
-    public readonly email: string,
-    public readonly kycStatus: KycStatus,
-    public readonly createdAt: Date,
-  ) {}
+import { IsString, IsNotEmpty, IsEnum } from 'class-validator';
 
-  isKycVerified(): boolean {
-    return this.kycStatus === KycStatus.VERIFIED
-  }
-}
-
-export enum KycStatus {
+export enum UserStatus {
   PENDING = 'pending',
   VERIFIED = 'verified',
   REJECTED = 'rejected',
+}
+
+export interface User {
+  walletAddress: string; // acts like an id
+  name: string;
+  status: UserStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export class CreateUserDto {
+  @IsString()
+  @IsNotEmpty()
+  walletAddress: string;
+
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+}
+
+export class UpdateUserStatusDto {
+  @IsEnum(UserStatus)
+  status: UserStatus;
 }
