@@ -20,4 +20,9 @@ export class PlatformController {
   async isHuman(@Param('wallet') wallet: string): Promise<{ isHuman?: boolean; score?: number; success: boolean; message: string }> {
     return this.platformService.isHuman(wallet);
   }
+
+  @Get('is-human-ns/:wallet')
+  async isHumanNS(@Param('wallet') wallet: string): Promise<{ isHuman?: boolean; success: boolean; message: string }> {
+    return this.platformService.isHumanNS(wallet);
+  }
 }

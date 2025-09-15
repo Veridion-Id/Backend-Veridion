@@ -120,4 +120,40 @@ export class PlatformService {
       };
     }
   }
+
+  async isHumanNS(wallet: string): Promise<{ isHuman?: boolean; success: boolean; message: string }> {
+    try {
+      this.logger.log(`Checking if wallet is human (no score): ${wallet}`);
+
+      // Validate wallet address format
+      if (!this.stellarService.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format'
+        };
+      }
+
+      // Get the user's score from the Stellar smart contract
+      const score = await this.stellarService.getScore(wallet);
+
+      // Determine if the user is human based on the threshold
+      const isHuman = score >= this.HUMAN_THRESHOLD;
+
+      this.logger.log(`Human check completed for wallet (no score): ${wallet}, isHuman: ${isHuman}, threshold: ${this.HUMAN_THRESHOLD}`);
+      
+      return {
+        isHuman,
+        success: true,
+        message: `Human verification completed. Threshold: ${this.HUMAN_THRESHOLD}, Result: ${isHuman ? 'Human' : 'Not Human'}`
+      };
+
+    } catch (error) {
+      this.logger.error(`Failed to check if wallet is human (no score): ${wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to verify if human: ${error instanceof Error ? error.message : 'Unknown error'}`
+      };
+    }
+  }
 }
+
