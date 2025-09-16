@@ -18,7 +18,7 @@ import {
   Verification,
   VerificationType,
   networks
-} from 'stellar-passport';
+} from '../../../packages/stellar-passport/src';
 
 export interface BuildTransactionResponse {
   success: boolean;
@@ -221,6 +221,7 @@ export class StellarService {
   ): Promise<BuildTransactionResponse> {
     try {
       this.logger.log(`Building register tx for wallet: ${wallet}, source: ${sourceAccount}`);
+
 
       // No validation due to passkey
 
