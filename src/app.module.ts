@@ -6,6 +6,7 @@ import { FirebaseModule } from './modules/firebase.module';
 import { UserModule } from './modules/user.module';
 import { AdminModule } from './modules/admin.module';
 import { PlatformModule } from './modules/platform.module';
+import { VeriffModule } from './modules/veriff.module';
 
 
 @Module({
@@ -18,6 +19,7 @@ import { PlatformModule } from './modules/platform.module';
     UserModule,
     AdminModule,
     PlatformModule,
+    VeriffModule,
   ],
   controllers: [AppController],
   providers: [AppService],
