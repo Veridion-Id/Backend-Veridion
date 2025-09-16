@@ -27,7 +27,9 @@
       "@/infrastructure/*": ["src/infrastructure/*"],
       "@/interfaces/*": ["src/interfaces/*"],
       "@/modules/*": ["src/modules/*"],
-      "@/packages/*": ["packages/*"]
+      "@/packages/*": ["packages/*"],
+      "@stellar/stellar-sdk/contract": ["node_modules/@stellar/stellar-sdk/lib/contract"],
+      "@stellar/stellar-sdk/rpc": ["node_modules/@stellar/stellar-sdk/lib/rpc"]
     }
   },
   "include": ["src/**/*", "packages/**/*"],

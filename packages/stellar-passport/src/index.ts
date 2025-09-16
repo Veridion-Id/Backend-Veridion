@@ -1,7 +1,29 @@
 import { Buffer } from "buffer";
-import { Address, contract, rpc } from '@stellar/stellar-sdk';
+import { Address } from '@stellar/stellar-sdk';
+import {
+  AssembledTransaction,
+  Client as ContractClient,
+  ClientOptions as ContractClientOptions,
+  MethodOptions,
+  Result,
+  Spec as ContractSpec,
+} from '@stellar/stellar-sdk/contract';
+import type {
+  u32,
+  i32,
+  u64,
+  i64,
+  u128,
+  i128,
+  u256,
+  i256,
+  Option,
+  Typepoint,
+  Duration,
+} from '@stellar/stellar-sdk/contract';
 export * from '@stellar/stellar-sdk'
-export { contract, rpc } from '@stellar/stellar-sdk'
+export * as contract from '@stellar/stellar-sdk/contract'
+export * as rpc from '@stellar/stellar-sdk/rpc'
 
 if (typeof window !== 'undefined') {
   //@ts-ignore Buffer exists
@@ -37,8 +59,8 @@ export type VerificationType = {tag: "Over18", values: void} | {tag: "Twitter", 
  */
 export interface Verification {
   issuer: string;
-  points: contract.i32;
-  timestamp: contract.u64;
+  points: i32;
+  timestamp: u64;
   vtype: VerificationType;
 }
 
@@ -49,9 +71,9 @@ export interface Verification {
  */
 export interface User {
   name: string;
-  score: contract.i32;
+  score: i32;
   surnames: string;
-  ver_count: contract.u32;
+  ver_count: u32;
   wallet: string;
 }
 
@@ -63,7 +85,7 @@ export type DataKey = {tag: "User", values: readonly [string]} | {tag: "Verifica
 /**
  * Eventos de negocio (útiles para indexadores y backends).
  */
-export type Event = {tag: "UserRegistered", values: readonly [string]} | {tag: "VerificationUpserted", values: readonly [string, VerificationType, contract.i32, contract.i32, contract.i32]};
+export type Event = {tag: "UserRegistered", values: readonly [string]} | {tag: "VerificationUpserted", values: readonly [string, VerificationType, i32, i32, i32]};
 
 export interface Client {
   /**
@@ -84,7 +106,7 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<contract.AssembledTransaction<contract.u32>>
+  }) => Promise<AssembledTransaction<u32>>
 
   /**
    * Construct and simulate a register transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -104,7 +126,7 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<contract.AssembledTransaction<null>>
+  }) => Promise<AssembledTransaction<null>>
 
   /**
    * Construct and simulate a get_score transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -124,7 +146,7 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<contract.AssembledTransaction<contract.i32>>
+  }) => Promise<AssembledTransaction<i32>>
 
   /**
    * Construct and simulate a get_verifications transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -144,12 +166,12 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<contract.AssembledTransaction<Array<Verification>>>
+  }) => Promise<AssembledTransaction<Array<Verification>>>
 
   /**
    * Construct and simulate a upsert_verification transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    */
-  upsert_verification: ({wallet, vtype, points}: {wallet: string, vtype: VerificationType, points: contract.i32}, options?: {
+  upsert_verification: ({wallet, vtype, points}: {wallet: string, vtype: VerificationType, points: i32}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -164,7 +186,7 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<contract.AssembledTransaction<contract.i32>>
+  }) => Promise<AssembledTransaction<i32>>
 
   /**
    * Construct and simulate a update_profile transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -184,14 +206,14 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<contract.AssembledTransaction<null>>
+  }) => Promise<AssembledTransaction<null>>
 
 }
-export class Client extends contract.Client {
+export class Client extends ContractClient {
   static async deploy<T = Client>(
     /** Options for initializing a Client as well as for calling a method, with extras specific to deploying. */
-    options: contract.MethodOptions &
-      Omit<contract.ClientOptions, "contractId"> & {
+    options: MethodOptions &
+      Omit<ContractClientOptions, "contractId"> & {
         /** The hash of the Wasm blob, which must already be installed on-chain. */
         wasmHash: Buffer | string;
         /** Salt used to generate the contract's ID. Passed through to {@link Operation.createCustomContract}. Default: random. */
@@ -199,12 +221,12 @@ export class Client extends contract.Client {
         /** The format used to decode `wasmHash`, if it's provided as a string. */
         format?: "hex" | "base64";
       }
-  ): Promise<contract.AssembledTransaction<T>> {
-    return contract.Client.deploy(null, options)
+  ): Promise<AssembledTransaction<T>> {
+    return ContractClient.deploy(null, options)
   }
-  constructor(public readonly options: contract.ClientOptions) {
+  constructor(public readonly options: ContractClientOptions) {
     super(
-      new contract.Spec([ "AAAABAAAAAAAAAAAAAAADVBhc3Nwb3J0RXJyb3IAAAAAAAAGAAAAAAAAABFBbHJlYWR5UmVnaXN0ZXJlZAAAAAAAAAEAAAAAAAAADU5vdFJlZ2lzdGVyZWQAAAAAAAACAAAAAAAAAAxVbmF1dGhvcml6ZWQAAAADAAAAAAAAAA1JbnZhbGlkUG9pbnRzAAAAAAAABAAAAAAAAAAIT3ZlcmZsb3cAAAAFAAAAAAAAABRUb29NYW55VmVyaWZpY2F0aW9ucwAAAAY=",
+      new ContractSpec([ "AAAABAAAAAAAAAAAAAAADVBhc3Nwb3J0RXJyb3IAAAAAAAAGAAAAAAAAABFBbHJlYWR5UmVnaXN0ZXJlZAAAAAAAAAEAAAAAAAAADU5vdFJlZ2lzdGVyZWQAAAAAAAACAAAAAAAAAAxVbmF1dGhvcml6ZWQAAAADAAAAAAAAAA1JbnZhbGlkUG9pbnRzAAAAAAAABAAAAAAAAAAIT3ZlcmZsb3cAAAAFAAAAAAAAABRUb29NYW55VmVyaWZpY2F0aW9ucwAAAAY=",
         "AAAAAgAAAGpUaXBvcyBkZSB2ZXJpZmljYWNpw7NuIHNvcG9ydGFkb3MuCmBDdXN0b20oU3ltYm9sKWAgcGVybWl0ZSBleHRlbnNpb25lcyAocC5lai4gIm92ZXIxOF9jciIsICJreWNfc3Vtc3ViIikuAAAAAAAAAAAAEFZlcmlmaWNhdGlvblR5cGUAAAAGAAAAAAAAAAAAAAAGT3ZlcjE4AAAAAAAAAAAAAAAAAAdUd2l0dGVyAAAAAAAAAAAAAAAABkdpdEh1YgAAAAAAAAAAAAAAAAAIQnJpZ2h0SUQAAAAAAAAAAAAAAAdXb3JsZElEAAAAAAEAAAAAAAAABkN1c3RvbQAAAAAAAQAAABE=",
         "AAAAAQAAADFVbmEgdmVyaWZpY2FjacOzbiBjb25jcmV0YSBhcGxpY2FkYSBhIHVuIHVzdWFyaW8uAAAAAAAAAAAAAAxWZXJpZmljYXRpb24AAAAEAAAAAAAAAAZpc3N1ZXIAAAAAABMAAAAAAAAABnBvaW50cwAAAAAABQAAAAAAAAAJdGltZXN0YW1wAAAAAAAABgAAAAAAAAAFdnR5cGUAAAAAAAfQAAAAEFZlcmlmaWNhdGlvblR5cGU=",
         "AAAAAQAAAHxEYXRvcyBhZ3JlZ2Fkb3MgZGVsIHVzdWFyaW8uCmBuYW1lYCAvIGBzdXJuYW1lc2Agc29uIG9wY2lvbmFsZXMgYSBuaXZlbCBkZSBwcm9kdWN0byAocHVlZGVuIHF1ZWRhciB2YWPDrW9zIHBhcmEgcHJpdmFjaWRhZCkuAAAAAAAAAARVc2VyAAAABQAAAAAAAAAEbmFtZQAAABAAAAAAAAAABXNjb3JlAAAAAAAABQAAAAAAAAAIc3VybmFtZXMAAAAQAAAAAAAAAAl2ZXJfY291bnQAAAAAAAAEAAAAAAAAAAZ3YWxsZXQAAAAAABM=",
@@ -219,6 +241,4 @@ export class Client extends contract.Client {
       options
     )
   }
-  // Note: fromJSON methods removed due to compatibility issues
-  // These can be added back when the correct method names are identified
 }
