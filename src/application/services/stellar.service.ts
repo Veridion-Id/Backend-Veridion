@@ -222,9 +222,7 @@ export class StellarService {
     try {
       this.logger.log(`Building register tx for wallet: ${wallet}, source: ${sourceAccount}`);
 
-      // 0) Validate
-      if (!this.validateWalletAddress(wallet)) throw new Error('Invalid wallet address format');
-      if (!this.validateWalletAddress(sourceAccount)) throw new Error('Invalid source account format');
+      // No validation due to passkey
 
       // 1) Check if user is already registered to prevent function_trapped error
       try {
@@ -406,114 +404,20 @@ export class StellarService {
    */
   async submitSignedTransaction(signedXdr: string): Promise<SubmitTransactionResponse> {
     try {
-      this.logger.log('Submitting signed transaction');
-      this.logger.debug(`Network passphrase: ${this.networkPassphrase}`);
-      this.logger.debug(`XDR length: ${signedXdr.length}`);
-
-      // Parse the signed transaction
-      let transaction;
-      try {
-        transaction = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
-        this.logger.log('Transaction parsed successfully');
-      } catch (parseError) {
-        this.logger.error('Error parsing XDR transaction:', parseError);
-        throw new Error(`Failed to parse XDR transaction: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
-      }
-
-      // Check if this is a sequence number issue and try to fix it
-      if ('sequence' in transaction) {
-        this.logger.debug(`Transaction sequence: ${transaction.sequence}`);
-        
-        try {
-          // Get the current account info to check sequence
-          const account = await this.server.loadAccount(transaction.source);
-          const currentSequence = account.sequenceNumber();
-          
-          this.logger.debug(`Account current sequence: ${currentSequence}`);
-          
-          // If the transaction sequence is lower than current, we need to rebuild
-          if (parseInt(transaction.sequence) < parseInt(currentSequence)) {
-            this.logger.warn(`Transaction sequence (${transaction.sequence}) is lower than current account sequence (${currentSequence}). This will cause tx_bad_seq error.`);
-            this.logger.warn('Attempting to rebuild transaction with current sequence...');
-            
-            // For Soroban transactions, we can't easily rebuild them due to contract-specific operations
-            // Instead, we'll provide clear guidance to the user
-            this.logger.warn('Cannot automatically rebuild Soroban transaction. User must rebuild from the build endpoint.');
-            return {
-              success: false,
-              error: `Transaction sequence (${transaction.sequence}) is outdated. Current account sequence is ${currentSequence}. Please rebuild the transaction using the build endpoint with the current sequence.`
-            };
-          }
-        } catch (accountError) {
-          this.logger.warn('Could not fetch account info to check sequence:', accountError);
-          // Continue with submission attempt
-        }
-      }
-
-      // Submit to Horizon
-      this.logger.log('Submitting transaction to Horizon...');
-      this.logger.debug(`Transaction source: ${transaction.source}`);
-      if ('sequence' in transaction) {
-        this.logger.debug(`Transaction sequence: ${transaction.sequence}`);
-      }
-      this.logger.debug(`Transaction operations count: ${transaction.operations.length}`);
+      this.logger.log('Submitting signed transaction to Horizon');
       
-      let result;
-      try {
-        result = await this.server.submitTransaction(transaction);
-      } catch (submitError) {
-        this.logger.error('Standard submission failed, trying alternative method:', submitError);
-        
-        // Try submitting with different parsing approach
-        try {
-          const altTransaction = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
-          result = await this.server.submitTransaction(altTransaction);
-          this.logger.log('Alternative parsing submission succeeded');
-        } catch (xdrError) {
-          this.logger.error('Alternative parsing also failed:', xdrError);
-          throw submitError; // Throw the original error
-        }
-      }
-
+      // Parse and submit the signed transaction
+      const transaction = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+      const result = await this.server.submitTransaction(transaction);
+      
       this.logger.log(`Transaction submitted successfully. Hash: ${result.hash}`);
-
       return {
         success: true,
         transactionHash: result.hash,
-        resultMeta: undefined // TODO: Add proper result meta when available
+        resultMeta: undefined
       };
-
     } catch (error) {
-      this.logger.error('Error submitting signed transaction:', error);
-      
-      // Enhanced error handling for Horizon errors
-      if (error && typeof error === 'object' && 'response' in error) {
-        const horizonError = error as any;
-        this.logger.error('Horizon error details:', {
-          status: horizonError.response?.status,
-          statusText: horizonError.response?.statusText,
-          data: horizonError.response?.data
-        });
-        
-        if (horizonError.response?.data) {
-          const errorData = horizonError.response.data;
-          
-          // Parse Soroban contract errors
-          const contractError = this.parseSorobanContractError(errorData);
-          if (contractError) {
-            return {
-              success: false,
-              error: `Contract error: ${contractError}`
-            };
-          }
-          
-          return {
-            success: false,
-            error: `Horizon error: ${JSON.stringify(errorData)}`
-          };
-        }
-      }
-      
+      this.logger.error('Error submitting transaction:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'
