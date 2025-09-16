@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { StellarService } from './stellar.service';
+import { StellarService, StatusType as StellarStatusType, StatusUpdateResponse, StatusResponse } from './stellar.service';
 import { PlatformService } from './platform.service';
 import { 
   BuildRegisterTransactionDto,
@@ -8,7 +8,11 @@ import {
   SubmitSignedTransactionResponse,
   BuildCreateVerificationTransactionDto,
   BuildCreateVerificationTransactionResponse,
-  ApiKeyResponse
+  ApiKeyResponse,
+  StatusType,
+  GetStatusResponse,
+  UpdateStatusDto,
+  UpdateStatusResponse
 } from '../../domain/entities/admin.entity';
 import { ApiKeyRequestDto, ApiKeyResponse as HumanApiKeyResponse } from '../../domain/entities/api-key.entity';
 
@@ -275,6 +279,200 @@ export class AdminService {
    */
   async getAccountSequence(accountId: string): Promise<{ sequence: string; success: boolean; error?: string }> {
     return this.stellarService.getAccountSequence(accountId);
+  }
+
+
+  /**
+   * Build a client-based register transaction (BUILD phase)
+   * Uses the createClient method for building transactions
+   */
+  async buildClientRegisterTransaction(
+    buildDto: BuildRegisterTransactionDto
+  ): Promise<BuildRegisterTransactionResponse> {
+    try {
+      this.logger.log(`Building client register transaction for wallet: ${buildDto.wallet}`);
+
+      // Call the stellar service to build the transaction using the client method
+      const result = await this.stellarService.createClientAndBuildRegisterTransaction(
+        buildDto.wallet,
+        buildDto.name,
+        buildDto.surnames
+      );
+
+      if (result.success) {
+        this.logger.log(`Client transaction built successfully for wallet: ${buildDto.wallet}`);
+        return {
+          success: true,
+          message: 'Client transaction built successfully',
+          xdr: result.xdr,
+          sourceAccount: result.sourceAccount,
+          sequence: result.sequence,
+          fee: result.fee,
+          timebounds: result.timebounds,
+          footprint: result.footprint,
+          authEntries: result.authEntries
+        };
+      } else {
+        this.logger.error(`Failed to build client transaction for wallet: ${buildDto.wallet}, error: ${result.error}`);
+        return {
+          success: false,
+          message: `Failed to build client transaction: ${result.error}`,
+          error: result.error
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to build client register transaction for wallet: ${buildDto.wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to build client transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Get user status from verifications
+   * Searches through user verifications to find Custom verification with status
+   */
+  async getStatus(wallet: string): Promise<GetStatusResponse> {
+    try {
+      this.logger.log(`Getting status for wallet: ${wallet}`);
+
+      // Validate wallet address format
+      if (!this.stellarService.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format',
+          error: 'Invalid wallet address format'
+        };
+      }
+
+      // Get all verifications for the user
+      const verifications = await this.stellarService.getVerifications(wallet);
+
+      // Look for Custom verification with status (most recent one)
+      let latestStatus: StatusType | null = null;
+      let latestTimestamp = BigInt(0);
+
+      for (const verification of verifications) {
+        if (verification.vtype.tag === 'Custom' && verification.vtype.values[0]) {
+          const customValue = verification.vtype.values[0];
+          // Check if it's a status verification
+          if (['APPROVED', 'PENDING', 'REJECTED'].includes(customValue)) {
+            const status = customValue as StatusType;
+            if (verification.timestamp > latestTimestamp) {
+              latestStatus = status;
+              latestTimestamp = verification.timestamp;
+            }
+          }
+        }
+      }
+
+      if (latestStatus) {
+        this.logger.log(`Status found for wallet: ${wallet}, status: ${latestStatus}`);
+        return {
+          success: true,
+          status: latestStatus,
+          message: `Status retrieved successfully: ${latestStatus}`
+        };
+      } else {
+        this.logger.log(`No status found for wallet: ${wallet}, defaulting to PENDING`);
+        return {
+          success: true,
+          status: 'PENDING',
+          message: 'No status found, defaulting to PENDING'
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to get status for wallet: ${wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to get status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Update user status by creating a Custom verification
+   * Creates a verification with Custom type containing the status
+   */
+  async updateStatus(wallet: string, updateDto: UpdateStatusDto): Promise<UpdateStatusResponse> {
+    try {
+      this.logger.log(`Updating status for wallet: ${wallet}, status: ${updateDto.status}, source: ${updateDto.sourceAccount}`);
+
+      // Validate wallet address format
+      if (!this.stellarService.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format',
+          error: 'Invalid wallet address format'
+        };
+      }
+
+      // Validate source account format
+      if (!this.stellarService.validateWalletAddress(updateDto.sourceAccount)) {
+        return {
+          success: false,
+          message: 'Invalid source account format',
+          error: 'Invalid source account format'
+        };
+      }
+
+      // Validate status type
+      if (!['APPROVED', 'PENDING', 'REJECTED'].includes(updateDto.status)) {
+        return {
+          success: false,
+          message: 'Invalid status type. Must be APPROVED, PENDING, or REJECTED',
+          error: 'Invalid status type'
+        };
+      }
+
+      // Create a verification object with Custom type containing the status
+      const verification = {
+        issuer: 'admin', // Default issuer for admin-created verifications
+        points: 0, // Status verifications don't need points
+        timestamp: BigInt(Date.now()),
+        vtype: { tag: 'Custom', values: [updateDto.status] } as any
+      };
+
+      // Call the stellar service to build the transaction
+      const result = await this.stellarService.buildCreateVerificationTransaction(
+        wallet,
+        verification,
+        updateDto.sourceAccount
+      );
+
+      if (result.success) {
+        this.logger.log(`Status update transaction built successfully for wallet: ${wallet}, status: ${updateDto.status}`);
+        return {
+          success: true,
+          message: `Status update transaction built successfully for ${updateDto.status}`,
+          xdr: result.xdr,
+          sourceAccount: result.sourceAccount,
+          sequence: result.sequence,
+          fee: result.fee,
+          timebounds: result.timebounds,
+          footprint: result.footprint
+        };
+      } else {
+        return {
+          success: false,
+          message: `Failed to build status update transaction: ${result.error}`,
+          error: result.error
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to build status update transaction for wallet: ${wallet}, status: ${updateDto.status}`, error);
+      return {
+        success: false,
+        message: `Failed to build status update transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
   }
 
 }

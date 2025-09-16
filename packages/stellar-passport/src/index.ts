@@ -241,12 +241,4 @@ export class Client extends ContractClient {
       options
     )
   }
-  public readonly fromJSON = {
-    version: this.txFromJSON<u32>,
-        register: this.txFromJSON<null>,
-        get_score: this.txFromJSON<i32>,
-        get_verifications: this.txFromJSON<Array<Verification>>,
-        upsert_verification: this.txFromJSON<i32>,
-        update_profile: this.txFromJSON<null>
-  }
 }

@@ -11,7 +11,8 @@ import {
   Address,
   rpc,
   Account,
-  contract
+  contract,
+  authorizeEntry
 } from '@stellar/stellar-sdk';
 import { 
   Client as StellarPassportClient,
@@ -19,6 +20,7 @@ import {
   VerificationType,
   networks
 } from '../../../packages/stellar-passport/src';
+
 
 export interface BuildTransactionResponse {
   success: boolean;
@@ -31,6 +33,7 @@ export interface BuildTransactionResponse {
     maxTime: string;
   };
   footprint?: string;
+  authEntries?: any[]; // Authorization entries that need to be signed
   error?: string;
 }
 
@@ -40,6 +43,30 @@ export interface SubmitTransactionResponse {
   resultMeta?: string;
   error?: string;
   rebuiltXdr?: string; // New XDR with updated sequence number
+}
+
+export type StatusType = 'approved' | 'rejected' | 'pending';
+
+export interface StatusUpdateResponse {
+  success: boolean;
+  message: string;
+  xdr?: string;
+  sourceAccount?: string;
+  sequence?: string;
+  fee?: string;
+  timebounds?: {
+    minTime: string;
+    maxTime: string;
+  };
+  footprint?: string;
+  error?: string;
+}
+
+export interface StatusResponse {
+  success: boolean;
+  status?: StatusType;
+  message: string;
+  error?: string;
 }
 
 @Injectable()
@@ -103,6 +130,31 @@ export class StellarService {
     });
   }
 
+  /**
+   * Creates a StellarPassportClient with automatic authentication
+   * This follows the pattern from your StellarPassportService
+   */
+  private createClientWithAuth(address: string, signTransactionCallback: (txXdr: string) => Promise<{ signedTxXdr: string }>): StellarPassportClient {
+    return new StellarPassportClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      publicKey: address,
+      signTransaction: signTransactionCallback,
+    });
+  }
+
+  /**
+   * Crea un cliente configurado para autenticación automática
+   */
+  private createClient(address: string): StellarPassportClient {
+    return new StellarPassportClient({
+      contractId: networks.testnet.contractId,
+      networkPassphrase: networks.testnet.networkPassphrase,
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      publicKey: address,
+    });
+  }
 
   /**
    * Get user score from the Stellar smart contract
@@ -211,7 +263,8 @@ export class StellarService {
 
   /**
    * Build a transaction for user registration (BUILD phase)
-   * Creates an unsigned XDR transaction that the client can sign
+   * Creates a transaction with proper Soroban authorization handling
+   * Following the pattern from StellarPassportService
    */
   async buildRegisterTransaction(
     wallet: string,
@@ -220,83 +273,19 @@ export class StellarService {
     sourceAccount: string
   ): Promise<BuildTransactionResponse> {
     try {
-      this.logger.log(`Building register tx for wallet: ${wallet}, source: ${sourceAccount}`);
-
-
-      // No validation due to passkey
-
-      // 1) Check if user is already registered to prevent function_trapped error
-      try {
-        const existingScore = await this.getScore(wallet);
-        if (existingScore !== null && existingScore !== undefined) {
-          this.logger.warn(`User ${wallet} is already registered with score: ${existingScore}`);
-          return {
-            success: false,
-            error: 'User is already registered. Registration is not allowed for existing users.'
-          };
-        }
-      } catch (scoreError) {
-        // If getScore fails, it might mean the user is not registered, which is what we want
-        this.logger.log(`User ${wallet} appears to be not registered (getScore failed), proceeding with registration`);
-      }
-
-      // 2) Get latest sequence from HORIZON for logging/debugging
-      const acc = await this.server.loadAccount(sourceAccount);
-      const currentSeqStr = acc.sequence;
-      const currentSeq = BigInt(currentSeqStr);
-      this.logger.log(`Horizon seq for ${sourceAccount}: ${currentSeqStr}`);
-
-      // 3) Create a new client instance with the source account
-      // This ensures the client uses the correct account for sequence management
-      const clientWithSource = new StellarPassportClient({
-        contractId: this.contractId,
-        networkPassphrase: this.networkPassphrase,
-        rpcUrl: this.rpcUrl,
-        publicKey: sourceAccount, // This is the key fix!
-      });
-
-      // 4) Use the client with the correct source account
-      const assembled = await clientWithSource.register(
-        { wallet, name, surnames },
-        { timeoutInSeconds: 120 }
-      );
-
-      // 5) Simulate the transaction to prepare it
-      await assembled.simulate();
-
-      // 6) Get the XDR and check sequence
-      const xdrString = assembled.toXDR();
-      const parsedTx = TransactionBuilder.fromXDR(xdrString, this.networkPassphrase);
-      const txSequence = 'sequence' in parsedTx ? BigInt(parsedTx.sequence) : 1n;
+      this.logger.log(`Building register transaction for wallet: ${wallet}, source: ${sourceAccount}`);
       
-      // 7) If sequence is wrong, provide helpful error message
-      if (txSequence !== currentSeq + 1n) {
-        this.logger.error(`Transaction sequence (${txSequence}) is wrong. Expected: ${(currentSeq + 1n).toString()}.`);
-        this.logger.error('The stellar-passport client is not properly fetching the current sequence.');
-        
-        return {
-          success: false,
-          error: `Transaction sequence mismatch. Built with sequence ${txSequence}, but expected ${(currentSeq + 1n).toString()}. The stellar-passport client may not be properly configured with the source account. Please check your client configuration or try using a different approach.`
-        };
-      }
-
-      // 8) Use the original transaction if sequence is correct
-      const finalSeq = 'sequence' in parsedTx ? parsedTx.sequence : (currentSeq + 1n).toString();
-      const fee = parsedTx.fee;
-      const tb = 'timeBounds' in parsedTx ? parsedTx.timeBounds : undefined;
-
-      this.logger.log(`Transaction built with correct sequence: ${finalSeq}`);
+      const client = this.createClient(wallet);
+      const transaction = await client.register({wallet, name, surnames});
+      
+      // Simulate to get authorization entries and prepare the transaction
+      const simulation = await transaction.simulate();
 
       return {
         success: true,
-        xdr: xdrString,
-        sourceAccount,
-        sequence: finalSeq.toString(),
-        fee: String(fee),
-        timebounds: tb ? { minTime: tb.minTime.toString(), maxTime: tb.maxTime.toString() } : undefined,
-        footprint: undefined,
+        sourceAccount: sourceAccount,
+        xdr: transaction.toXDR(),
       };
-
     } catch (error) {
       this.logger.error('Error building register transaction:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -401,15 +390,24 @@ export class StellarService {
 
   /**
    * Submit a signed transaction (SUBMIT phase)
-   * Submits the signed XDR to the network
+   * Submits the signed XDR to the Soroban RPC network
    */
   async submitSignedTransaction(signedXdr: string): Promise<SubmitTransactionResponse> {
     try {
-      this.logger.log('Submitting signed transaction to Horizon');
+      this.logger.log('Submitting signed transaction to Soroban RPC');
+      this.logger.log(`Network passphrase: ${this.networkPassphrase}`);
+      this.logger.log(`RPC URL: ${this.rpcUrl}`);
       
-      // Parse and submit the signed transaction
-      const transaction = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
-      const result = await this.server.submitTransaction(transaction);
+      // Validate XDR format first
+      if (!signedXdr || typeof signedXdr !== 'string') {
+        throw new Error('Invalid XDR: must be a non-empty string');
+      }
+      
+      // Rehydrate the Transaction from its XDR
+      const tx = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+      
+      // Submit to Soroban RPC instead of Horizon
+      const result = await this.rpcServer.sendTransaction(tx);
       
       this.logger.log(`Transaction submitted successfully. Hash: ${result.hash}`);
       return {
@@ -426,6 +424,137 @@ export class StellarService {
     }
   }
 
+
+  /**
+   * Update user status using upsert_verification
+   * Creates a transaction to update the user's status (approved, rejected, pending)
+   */
+  async buildUpdateStatusTransaction(
+    wallet: string,
+    status: StatusType,
+    sourceAccount: string
+  ): Promise<StatusUpdateResponse> {
+    try {
+      this.logger.log(`Building update status transaction for wallet: ${wallet}, status: ${status}, source: ${sourceAccount}`);
+
+      // Input validation
+      if (!this.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format',
+          error: 'Invalid wallet address format'
+        };
+      }
+
+      if (!this.validateStatusType(status)) {
+        return {
+          success: false,
+          message: 'Invalid status type. Must be approved, rejected, or pending',
+          error: 'Invalid status type'
+        };
+      }
+
+      // Convert status to verification type
+      const verificationType = this.statusToVerificationType(status);
+      
+      // Create verification object for status update
+      const verification: Verification = {
+        issuer: 'system', // System-issued status
+        points: 0, // Status doesn't contribute to points
+        timestamp: BigInt(Date.now()),
+        vtype: verificationType
+      };
+
+      // Build the transaction using existing method
+      const result = await this.buildCreateVerificationTransaction(wallet, verification, sourceAccount);
+
+      if (result.success) {
+        this.logger.log(`Status update transaction built successfully for wallet: ${wallet}, status: ${status}`);
+        return {
+          success: true,
+          message: `Status update transaction built successfully for ${status}`,
+          xdr: result.xdr,
+          sourceAccount: result.sourceAccount,
+          sequence: result.sequence,
+          fee: result.fee,
+          timebounds: result.timebounds,
+          footprint: result.footprint
+        };
+      } else {
+        return {
+          success: false,
+          message: `Failed to build status update transaction: ${result.error}`,
+          error: result.error
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to build status update transaction for wallet: ${wallet}, status: ${status}`, error);
+      return {
+        success: false,
+        message: `Failed to build status update transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Get user status from verifications
+   * Searches through user verifications to find the current status
+   */
+  async getStatus(wallet: string): Promise<StatusResponse> {
+    try {
+      this.logger.log(`Getting status for wallet: ${wallet}`);
+
+      // Input validation
+      if (!this.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format',
+          error: 'Invalid wallet address format'
+        };
+      }
+
+      // Get all verifications for the user
+      const verifications = await this.getVerifications(wallet);
+
+      // Look for status verification (most recent one)
+      let latestStatus: StatusType | null = null;
+      let latestTimestamp = BigInt(0);
+
+      for (const verification of verifications) {
+        const status = this.verificationTypeToStatus(verification.vtype);
+        if (status && verification.timestamp > latestTimestamp) {
+          latestStatus = status;
+          latestTimestamp = verification.timestamp;
+        }
+      }
+
+      if (latestStatus) {
+        this.logger.log(`Status found for wallet: ${wallet}, status: ${latestStatus}`);
+        return {
+          success: true,
+          status: latestStatus,
+          message: `Status retrieved successfully: ${latestStatus}`
+        };
+      } else {
+        this.logger.log(`No status found for wallet: ${wallet}, defaulting to pending`);
+        return {
+          success: true,
+          status: 'pending',
+          message: 'No status found, defaulting to pending'
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to get status for wallet: ${wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to get status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
 
   /**
    * Convert string verification type to VerificationType enum
@@ -449,6 +578,33 @@ export class StellarService {
         // For custom types, wrap in Custom
         return { tag: 'Custom', values: [typeStr] };
     }
+  }
+
+  /**
+   * Convert status type to custom verification type
+   */
+  private statusToVerificationType(status: StatusType): VerificationType {
+    return { tag: 'Custom', values: [`status_${status}`] };
+  }
+
+  /**
+   * Extract status from verification type
+   */
+  private verificationTypeToStatus(vtype: VerificationType): StatusType | null {
+    if (vtype.tag === 'Custom' && vtype.values[0]?.startsWith('status_')) {
+      const status = vtype.values[0].replace('status_', '') as StatusType;
+      if (['approved', 'rejected', 'pending'].includes(status)) {
+        return status;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Validate status type
+   */
+  private validateStatusType(status: string): status is StatusType {
+    return ['approved', 'rejected', 'pending'].includes(status);
   }
 
   /**
@@ -697,5 +853,84 @@ export class StellarService {
     }
     
     return null;
+  }
+
+  /**
+   * Create a client and build a register transaction
+   * This demonstrates how to use the createClient method
+   */
+  async createClientAndBuildRegisterTransaction(
+    wallet: string,
+    name: string,
+    surnames: string
+  ): Promise<BuildTransactionResponse> {
+    try {
+      this.logger.log(`Creating client and building register transaction for wallet: ${wallet}`);
+
+      // Create a client using the new createClient method
+      const client = this.createClient(wallet);
+
+      // Build the register transaction
+      const transaction = await client.register({ wallet, name, surnames });
+
+      // Simulate to get authorization entries and prepare the transaction
+      const simulation = await transaction.simulate();
+      this.logger.log(`Simulation completed. Auth entries: ${(simulation as any).auth?.length || 0}`);
+
+      // Get the latest ledger for proper expiration
+      const latestLedger = await this.rpcServer.getLatestLedger();
+      const expirationLedger = latestLedger.sequence + 1000;
+
+      // Handle authorization entries if they exist
+      let authEntries = [];
+      const simulationAuth = (simulation as any).auth;
+      if (simulationAuth && simulationAuth.length > 0) {
+        this.logger.log(`Found ${simulationAuth.length} authorization entries`);
+        
+        // Prepare auth entries with proper expiration ledger
+        authEntries = simulationAuth.map(entry => ({
+          ...entry,
+          credentials: {
+            ...entry.credentials,
+            address: {
+              ...entry.credentials.address,
+              signature_expiration_ledger: expirationLedger
+            }
+          }
+        }));
+        
+        this.logger.log(`Prepared ${authEntries.length} auth entries with expiration ledger: ${expirationLedger}`);
+      }
+
+      // Get the transaction XDR
+      const xdrString = transaction.toXDR();
+      const parsedTx = TransactionBuilder.fromXDR(xdrString, this.networkPassphrase);
+      const fee = parsedTx.fee;
+      const tb = 'timeBounds' in parsedTx ? parsedTx.timeBounds : undefined;
+      const sequence = 'sequence' in parsedTx ? parsedTx.sequence : '0';
+
+      this.logger.log(`Transaction built successfully. Sequence: ${sequence}, Auth entries: ${authEntries.length}`);
+      
+      if (authEntries.length > 0) {
+        this.logger.log(`IMPORTANT: This transaction has ${authEntries.length} authorization entries that need to be signed manually.`);
+        this.logger.log(`Use Stellar Lab or another tool to sign the authorization entries before submitting.`);
+        this.logger.log(`Authorization entries require signing by: ${wallet}`);
+      }
+
+      return {
+        success: true,
+        xdr: xdrString,
+        sourceAccount: wallet,
+        sequence,
+        fee: String(fee),
+        timebounds: tb ? { minTime: tb.minTime.toString(), maxTime: tb.maxTime.toString() } : undefined,
+        footprint: undefined,
+        authEntries: authEntries
+      };
+
+    } catch (error) {
+      this.logger.error('Error creating client and building register transaction:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   }
 }

@@ -7,7 +7,10 @@ import {
   SubmitSignedTransactionResponse,
   BuildCreateVerificationTransactionDto,
   BuildCreateVerificationTransactionResponse,
-  ApiKeyResponse
+  ApiKeyResponse,
+  GetStatusResponse,
+  UpdateStatusDto,
+  UpdateStatusResponse
 } from '../../domain/entities/admin.entity';
 import { ApiKeyResponse as HumanApiKeyResponse } from '../../domain/entities/api-key.entity';
 
@@ -61,5 +64,21 @@ export class AdminController {
   @Get('account-sequence/:accountId')
   async getAccountSequence(@Param('accountId') accountId: string): Promise<{ sequence: string; success: boolean; error?: string }> {
     return this.adminService.getAccountSequence(accountId);
+  }
+
+
+
+  @Get('get-status/:wallet')
+  async getStatus(@Param('wallet') wallet: string): Promise<GetStatusResponse> {
+    return this.adminService.getStatus(wallet);
+  }
+
+  @Post('update-status/:wallet')
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  async updateStatus(
+    @Param('wallet') wallet: string,
+    @Body() updateDto: UpdateStatusDto
+  ): Promise<UpdateStatusResponse> {
+    return this.adminService.updateStatus(wallet, updateDto);
   }
 }

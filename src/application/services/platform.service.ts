@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { StellarService } from './stellar.service';
+import { StellarService, StatusType, StatusUpdateResponse, StatusResponse } from './stellar.service';
 import { Verification } from '../../infrastructure/stellar/contract-bindings';
 
 @Injectable()
@@ -241,6 +241,118 @@ export class PlatformService {
       }
     }
     return 'unknown';
+  }
+
+  /**
+   * Update user status (approved, rejected, pending)
+   * Uses the stellar service to build a transaction for status update
+   */
+  async updateStatus(
+    wallet: string,
+    status: StatusType,
+    sourceAccount: string
+  ): Promise<StatusUpdateResponse> {
+    try {
+      this.logger.log(`Updating status for wallet: ${wallet}, status: ${status}`);
+
+      // Validate wallet address format
+      if (!this.stellarService.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format',
+          error: 'Invalid wallet address format'
+        };
+      }
+
+      // Validate status type
+      if (!['approved', 'rejected', 'pending'].includes(status)) {
+        return {
+          success: false,
+          message: 'Invalid status type. Must be approved, rejected, or pending',
+          error: 'Invalid status type'
+        };
+      }
+
+      // Call the stellar service to build the transaction
+      const result = await this.stellarService.buildUpdateStatusTransaction(
+        wallet,
+        status,
+        sourceAccount
+      );
+
+      if (result.success) {
+        this.logger.log(`Status update transaction built successfully for wallet: ${wallet}, status: ${status}`);
+        return {
+          success: true,
+          message: `Status update transaction built successfully for ${status}`,
+          xdr: result.xdr,
+          sourceAccount: result.sourceAccount,
+          sequence: result.sequence,
+          fee: result.fee,
+          timebounds: result.timebounds,
+          footprint: result.footprint
+        };
+      } else {
+        return {
+          success: false,
+          message: `Failed to build status update transaction: ${result.error}`,
+          error: result.error
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to update status for wallet: ${wallet}, status: ${status}`, error);
+      return {
+        success: false,
+        message: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Get user status (approved, rejected, pending)
+   * Searches through user verifications to find the current status
+   */
+  async getStatus(wallet: string): Promise<StatusResponse> {
+    try {
+      this.logger.log(`Getting status for wallet: ${wallet}`);
+
+      // Validate wallet address format
+      if (!this.stellarService.validateWalletAddress(wallet)) {
+        return {
+          success: false,
+          message: 'Invalid wallet address format',
+          error: 'Invalid wallet address format'
+        };
+      }
+
+      // Call the stellar service to get the status
+      const result = await this.stellarService.getStatus(wallet);
+
+      if (result.success) {
+        this.logger.log(`Status retrieved successfully for wallet: ${wallet}, status: ${result.status}`);
+        return {
+          success: true,
+          status: result.status,
+          message: `Status retrieved successfully: ${result.status}`
+        };
+      } else {
+        return {
+          success: false,
+          message: `Failed to get status: ${result.error}`,
+          error: result.error
+        };
+      }
+
+    } catch (error) {
+      this.logger.error(`Failed to get status for wallet: ${wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to get status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
   }
 }
 
