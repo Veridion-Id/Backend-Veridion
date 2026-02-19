@@ -1,4 +1,4 @@
-# Veridion Backend API
+# Veridion Backend
 
 A scalable NestJS backend application built with TypeScript and following Domain-Driven Design (DDD) principles with a layered architecture.
 
@@ -12,7 +12,7 @@ src/
 ├── core/             # Logger, errors, utilities
 ├── domain/           # Entities, value objects, ports/interfaces
 ├── application/      # Services, use cases
-├── infrastructure/   # External services (DB, cache, APIs)
+├── infrastructure/   # External services
 ├── interfaces/       # Controllers, DTOs, presenters
 ├── modules/          # Feature modules that bind everything
 └── test-utils/       # Testing utilities
