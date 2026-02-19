@@ -12,7 +12,7 @@ src/
 ├── core/             # Logger, errors, utilities
 ├── domain/           # Entities, value objects, ports/interfaces
 ├── application/      # Services, use cases
-├── infrastructure/   # External services (DB, cache, APIs)
+├── infrastructure/   # External services
 ├── interfaces/       # Controllers, DTOs, presenters
 ├── modules/          # Feature modules that bind everything
 └── test-utils/       # Testing utilities
