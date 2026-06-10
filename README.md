@@ -2,6 +2,8 @@
 
 A scalable NestJS backend application built with TypeScript and following Domain-Driven Design (DDD) principles with a layered architecture
 
+Testing
+
 ## 🏗️ Architecture testing
 
 This project follows a **layered architecture** pattern with clear separation of concerns:
