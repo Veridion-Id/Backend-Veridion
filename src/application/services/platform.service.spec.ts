@@ -95,17 +95,18 @@ describe('PlatformService', () => {
   describe('getVerifications', () => {
     it('should get verifications successfully for valid wallet', async () => {
       const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+      const timestamp = BigInt(Date.now());
       const expectedVerifications = [
         {
           issuer: 'test-issuer',
           points: 10,
-          timestamp: BigInt(Date.now()),
+          timestamp,
           vtype: { tag: 'Custom' as const, values: ['email'] as const },
         },
         {
           issuer: 'test-issuer',
           points: 15,
-          timestamp: BigInt(Date.now()),
+          timestamp,
           vtype: { tag: 'Custom' as const, values: ['phone'] as const },
         },
       ];
@@ -118,7 +119,10 @@ describe('PlatformService', () => {
       expect(stellarService.validateWalletAddress).toHaveBeenCalledWith(wallet);
       expect(stellarService.getVerifications).toHaveBeenCalledWith(wallet);
       expect(result).toEqual({
-        verifications: expectedVerifications,
+        verifications: [
+          { type: 'email', points: 10, timestamp: timestamp.toString() },
+          { type: 'phone', points: 15, timestamp: timestamp.toString() },
+        ],
         success: true,
         message: 'Verifications retrieved successfully',
       });
