@@ -106,7 +106,8 @@ describe('VeriffService', () => {
         {
           status: 'APPROVED',
           sourceAccount: adminSourceAccount,
-        }
+        },
+        { sessionToken: 'test-session-token' },
       );
     });
 
@@ -133,6 +134,9 @@ describe('VeriffService', () => {
       });
 
       jest.spyOn(service as any, 'verifyWebhookSignature').mockReturnValue(true);
+      jest.spyOn(service as any, 'extractWalletFromVendorData').mockReturnValue(
+        'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890',
+      );
 
       const result = await service.processWebhook(mockWebhookData, signature);
 

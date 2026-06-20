@@ -20,6 +20,7 @@ import {
   VerificationType,
   networks
 } from '../../../packages/stellar-passport/src';
+import { SubmitVerificationResult } from '../../domain/entities/failed-stellar-tx.entity';
 
 
 export interface BuildTransactionResponse {
@@ -859,6 +860,129 @@ export class StellarService {
    * Create a client and build a register transaction
    * This demonstrates how to use the createClient method
    */
+  /**
+   * Build, sign with admin keypair, and submit an upsert_verification transaction
+   * with automatic retry on transient sequence/RPC errors.
+   */
+  async submitVerificationWithRetry(params: {
+    wallet: string;
+    verification: Verification;
+    sourceAccount: string;
+  }): Promise<SubmitVerificationResult> {
+    const maxRetries = Number(
+      this.configService.get<string>('STELLAR_TX_MAX_RETRIES', '5'),
+    );
+    const backoffBaseMs = Number(
+      this.configService.get<string>('STELLAR_TX_BACKOFF_BASE_MS', '300'),
+    );
+
+    if (!this.adminKeypair) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError: 'Admin keypair not configured (STELLAR_ADMIN_SECRET_KEY)',
+      };
+    }
+
+    if (this.adminKeypair.publicKey() !== params.sourceAccount) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError:
+          'ADMIN_SOURCE_ACCOUNT does not match STELLAR_ADMIN_SECRET_KEY public key',
+      };
+    }
+
+    let lastError = 'Unknown error';
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const transactionHash = await this.buildSignAndSubmitVerification(params);
+        return { success: true, transactionHash, attempts: attempt };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Submit attempt ${attempt}/${maxRetries} failed for wallet=${params.wallet}: ${lastError}`,
+        );
+
+        if (!this.isRetriableError(lastError) || attempt === maxRetries) {
+          break;
+        }
+
+        const delayMs = backoffBaseMs * Math.pow(2, attempt - 1);
+        await this.sleep(delayMs);
+      }
+    }
+
+    this.logger.error(
+      `Exhausted retries for wallet=${params.wallet} operation=upsert_verification: ${lastError}`,
+    );
+
+    return { success: false, attempts: maxRetries, lastError };
+  }
+
+  private async buildSignAndSubmitVerification(params: {
+    wallet: string;
+    verification: Verification;
+    sourceAccount: string;
+  }): Promise<string> {
+    const verificationType = this.convertToVerificationType(params.verification.vtype);
+
+    const client = new StellarPassportClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      publicKey: params.sourceAccount,
+      signTransaction: async (txXdr: string) => {
+        const tx = TransactionBuilder.fromXDR(txXdr, this.networkPassphrase);
+        tx.sign(this.adminKeypair!);
+        return { signedTxXdr: tx.toXDR() };
+      },
+    });
+
+    const assembledTx = await client.upsert_verification(
+      {
+        wallet: params.wallet,
+        vtype: verificationType,
+        points: params.verification.points,
+      },
+      { timeoutInSeconds: 120 },
+    );
+
+    const sent = await assembledTx.signAndSend();
+    const hash = sent.sendTransactionResponse?.hash;
+
+    if (!hash) {
+      throw new Error('Transaction submitted but no hash returned');
+    }
+
+    this.logger.log(
+      `Verification submitted on-chain for wallet=${params.wallet}, hash=${hash}`,
+    );
+    return hash;
+  }
+
+  private isRetriableError(errorMessage: string): boolean {
+    const lower = errorMessage.toLowerCase();
+    return (
+      lower.includes('tx_bad_seq') ||
+      lower.includes('bad sequence') ||
+      lower.includes('sequence number') ||
+      lower.includes('timeout') ||
+      lower.includes('timed out') ||
+      lower.includes('econnreset') ||
+      lower.includes('econnrefused') ||
+      lower.includes('network') ||
+      lower.includes('503') ||
+      lower.includes('502') ||
+      lower.includes('504')
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   async createClientAndBuildRegisterTransaction(
     wallet: string,
     name: string,

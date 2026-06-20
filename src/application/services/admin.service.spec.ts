@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AdminService } from './admin.service';
 import { StellarService } from './stellar.service';
 import { PlatformService } from './platform.service';
+import { StellarTransactionQueue } from './stellar-transaction-queue.service';
+import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
 import { 
   BuildRegisterTransactionDto,
   SubmitSignedTransactionDto,
@@ -24,6 +26,21 @@ describe('AdminService', () => {
       isHuman: jest.fn(),
     };
 
+    const mockStellarQueue = {
+      enqueue: jest.fn((job: () => Promise<unknown>) => job()),
+      hasInFlightKey: jest.fn().mockReturnValue(false),
+      trackInFlightKey: jest.fn(),
+      untrackInFlightKey: jest.fn(),
+    };
+
+    const mockFailedTxRepository = {
+      create: jest.fn(),
+      findById: jest.fn(),
+      findUnresolvedByIdempotencyKey: jest.fn().mockResolvedValue(null),
+      markRetried: jest.fn(),
+      markResolved: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminService,
@@ -34,6 +51,14 @@ describe('AdminService', () => {
         {
           provide: PlatformService,
           useValue: mockPlatformService,
+        },
+        {
+          provide: StellarTransactionQueue,
+          useValue: mockStellarQueue,
+        },
+        {
+          provide: FailedStellarTxRepository,
+          useValue: mockFailedTxRepository,
         },
       ],
     }).compile();
@@ -224,7 +249,11 @@ describe('AdminService', () => {
 
       expect(stellarService.buildCreateVerificationTransaction).toHaveBeenCalledWith(
         buildDto.wallet,
-        { type: buildDto.verificationType, points: buildDto.points },
+        expect.objectContaining({
+          issuer: 'admin',
+          points: buildDto.points,
+          vtype: { tag: 'Custom', values: [buildDto.verificationType] },
+        }),
         buildDto.sourceAccount
       );
       expect(result).toEqual({
