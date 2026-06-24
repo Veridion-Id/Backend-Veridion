@@ -1,6 +1,5 @@
 import { Controller, Get, Param } from '@nestjs/common';
-import { PlatformService } from '../../application/services/platform.service';
-import { Verification } from '../../infrastructure/stellar/contract-bindings';
+import { PlatformService, VerificationView } from '../../application/services/platform.service'
 
 @Controller('platform')
 export class PlatformController {
@@ -12,7 +11,7 @@ export class PlatformController {
   }
 
   @Get('get-verifications/:wallet')
-  async getVerifications(@Param('wallet') wallet: string): Promise<{ verifications?: Verification[]; success: boolean; message: string }> {
+  async getVerifications(@Param('wallet') wallet: string): Promise<{ verifications?: VerificationView[]; success: boolean; message: string }> {
     return this.platformService.getVerifications(wallet);
   }
 

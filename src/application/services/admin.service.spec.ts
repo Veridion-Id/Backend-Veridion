@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AdminService } from './admin.service';
-import { StellarService } from './stellar.service';
+import { StellarService } from '../../infrastructure/stellar/stellar.service'
 import { PlatformService } from './platform.service';
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
