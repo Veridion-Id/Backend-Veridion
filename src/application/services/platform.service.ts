@@ -1,6 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { StellarService, StatusType, StatusUpdateResponse, StatusResponse } from './stellar.service';
-import { Verification } from '../../infrastructure/stellar/contract-bindings';
+import {
+  StellarService,
+  StatusType,
+  StatusUpdateResponse,
+  StatusResponse,
+} from '../../infrastructure/stellar/stellar.service'
+
+export interface VerificationView {
+  type: string
+  points: number
+  timestamp: string
+}
 
 @Injectable()
 export class PlatformService {
@@ -66,7 +76,7 @@ export class PlatformService {
    * Get user verifications from the smart contract
    * The contract returns a Vec<Verification>
    */
-  async getVerifications(wallet: string): Promise<{ verifications?: Verification[]; success: boolean; message: string }> {
+  async getVerifications(wallet: string): Promise<{ verifications?: VerificationView[]; success: boolean; message: string }> {
     try {
       this.logger.log(`Getting verifications for wallet: ${wallet}`);
 

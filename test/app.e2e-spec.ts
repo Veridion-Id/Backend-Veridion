@@ -5,7 +5,7 @@ import { Keypair } from '@stellar/stellar-sdk';
 import * as request from 'supertest';
 import * as crypto from 'crypto';
 import { AppModule } from '../src/app.module';
-import { StellarService } from '../src/application/services/stellar.service';
+import { StellarService } from '../src/infrastructure/stellar/stellar.service'
 import { FailedStellarTxRepository } from '../src/infrastructure/firebase/failed-stellar-tx.repository';
 import { FirebaseService } from '../src/infrastructure/firebase/firebase.adapter';
 

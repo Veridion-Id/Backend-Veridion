@@ -7,6 +7,8 @@ import { UserModule } from './modules/user.module';
 import { AdminModule } from './modules/admin.module';
 import { PlatformModule } from './modules/platform.module';
 import { VeriffModule } from './modules/veriff.module';
+import { PassModule } from './modules/pass.module';
+import { HealthModule } from './modules/health.module';
 
 
 @Module({
@@ -20,6 +22,8 @@ import { VeriffModule } from './modules/veriff.module';
     AdminModule,
     PlatformModule,
     VeriffModule,
+    PassModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PlatformService } from './platform.service';
-import { StellarService } from './stellar.service';
+import { StellarService } from '../../infrastructure/stellar/stellar.service'
 
 describe('PlatformService', () => {
   let service: PlatformService;

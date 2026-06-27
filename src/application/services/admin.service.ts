@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { StellarService, StatusType as StellarStatusType, StatusUpdateResponse, StatusResponse } from './stellar.service';
+import {
+  StellarService,
+  StatusType as StellarStatusType,
+  StatusUpdateResponse,
+  StatusResponse,
+} from '../../infrastructure/stellar/stellar.service'
 import { PlatformService } from './platform.service';
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';

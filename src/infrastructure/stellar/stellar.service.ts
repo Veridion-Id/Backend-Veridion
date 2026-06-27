@@ -14,13 +14,20 @@ import {
   contract,
   authorizeEntry
 } from '@stellar/stellar-sdk';
-import { 
+import {
   Client as StellarPassportClient,
   Verification,
   VerificationType,
-  networks
-} from '../../../packages/stellar-passport/src';
-import { SubmitVerificationResult } from '../../domain/entities/failed-stellar-tx.entity';
+  networks,
+} from '../../../packages/stellar-passport/src'
+import { SubmitVerificationResult } from '../../domain/entities/failed-stellar-tx.entity'
+import {
+  PassportPort,
+  PassportRegisterParams,
+  PassportTransactionResult,
+  PassportUpdateProfileParams,
+  PassportUpsertVerificationParams,
+} from '../../domain/ports/passport.port'
 
 
 export interface BuildTransactionResponse {
@@ -71,7 +78,7 @@ export interface StatusResponse {
 }
 
 @Injectable()
-export class StellarService {
+export class StellarService implements PassportPort {
   private readonly logger = new Logger(StellarService.name);
   private server: Horizon.Server;
   private rpcServer: rpc.Server;
@@ -259,6 +266,130 @@ export class StellarService {
       }
       
       throw new Error(`Failed to get verifications: ${errorMessage}`);
+    }
+  }
+
+  async register(params: PassportRegisterParams): Promise<PassportTransactionResult> {
+    const result = await this.buildRegisterTransaction(
+      params.wallet,
+      params.name,
+      params.surnames,
+      params.sourceAccount,
+    )
+    return this.toPassportTransactionResult(result)
+  }
+
+  async upsertVerification(
+    params: PassportUpsertVerificationParams,
+  ): Promise<PassportTransactionResult> {
+    const result = await this.buildCreateVerificationTransaction(
+      params.wallet,
+      params.verification,
+      params.sourceAccount,
+    )
+    return this.toPassportTransactionResult(result)
+  }
+
+  async updateProfile(
+    params: PassportUpdateProfileParams,
+  ): Promise<PassportTransactionResult> {
+    try {
+      this.logger.log(
+        `Building update profile transaction for wallet: ${params.wallet}, source: ${params.sourceAccount}`,
+      )
+
+      if (!this.validateWalletAddress(params.wallet)) {
+        return { success: false, error: 'Invalid wallet address format' }
+      }
+      if (!this.validateWalletAddress(params.sourceAccount)) {
+        return { success: false, error: 'Invalid source account format' }
+      }
+
+      const client = new StellarPassportClient({
+        contractId: this.contractId,
+        networkPassphrase: this.networkPassphrase,
+        rpcUrl: this.rpcUrl,
+        publicKey: params.sourceAccount,
+      })
+
+      const assembledTx = await client.update_profile(
+        {
+          wallet: params.wallet,
+          name: params.name,
+          surnames: params.surnames,
+        },
+        { timeoutInSeconds: 120 },
+      )
+
+      await assembledTx.simulate()
+      const xdrString = assembledTx.toXDR()
+      const parsedTransaction = TransactionBuilder.fromXDR(
+        xdrString,
+        this.networkPassphrase,
+      )
+      const sequence =
+        'sequence' in parsedTransaction ? parsedTransaction.sequence : '0'
+      const fee = parsedTransaction.fee
+      const timebounds =
+        'timeBounds' in parsedTransaction
+          ? parsedTransaction.timeBounds
+          : undefined
+
+      return {
+        success: true,
+        xdr: xdrString,
+        sourceAccount: params.sourceAccount,
+        sequence,
+        fee: String(fee),
+        timebounds: timebounds
+          ? {
+              minTime: timebounds.minTime.toString(),
+              maxTime: timebounds.maxTime.toString(),
+            }
+          : undefined,
+      }
+    } catch (error) {
+      this.logger.error('Error building update profile transaction:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  /**
+   * Check Stellar network reachability via Soroban RPC latest ledger.
+   */
+  async checkNetworkReachability(): Promise<{
+    reachable: boolean
+    network: string
+    error?: string
+  }> {
+    const network = this.configService.get<string>('STELLAR_NETWORK', 'testnet')
+    try {
+      await this.rpcServer.getLatestLedger()
+      return { reachable: true, network }
+    } catch (error) {
+      return {
+        reachable: false,
+        network,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  private toPassportTransactionResult(
+    result: BuildTransactionResponse,
+  ): PassportTransactionResult {
+    return {
+      success: result.success,
+      xdr: result.xdr,
+      sourceAccount: result.sourceAccount,
+      sequence: result.sequence,
+      fee: result.fee,
+      timebounds: result.timebounds,
+      footprint: result.footprint,
+      error: result.error,
     }
   }
 
