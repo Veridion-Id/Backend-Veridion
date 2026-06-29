@@ -26,4 +26,5 @@ export interface SubmitVerificationResult {
   lastError?: string;
   skipped?: boolean;
   message?: string;
+  alreadyRegistered?: boolean;
 }
