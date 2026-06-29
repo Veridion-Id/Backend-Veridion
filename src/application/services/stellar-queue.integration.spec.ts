@@ -6,6 +6,7 @@ import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
 import { AdminService } from './admin.service';
 import { PlatformService } from './platform.service';
+import { UserService } from './user.service';
 import * as crypto from 'crypto';
 
 describe('StellarService submitVerificationWithRetry', () => {
@@ -145,6 +146,7 @@ describe('AdminService idempotency and queue routing', () => {
         StellarTransactionQueue,
         { provide: StellarService, useValue: stellarService },
         { provide: PlatformService, useValue: { isHuman: jest.fn() } },
+        { provide: UserService, useValue: { create: jest.fn() } },
         { provide: FailedStellarTxRepository, useValue: failedTxRepository },
       ],
     }).compile();
