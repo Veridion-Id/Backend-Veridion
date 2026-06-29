@@ -7,6 +7,7 @@ import {
   StatusResponse,
 } from '../../infrastructure/stellar/stellar.service'
 import { PlatformService } from './platform.service';
+import { UserService } from './user.service';
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
 import { 
@@ -25,6 +26,7 @@ import {
 } from '../../domain/entities/admin.entity';
 import { ApiKeyRequestDto, ApiKeyResponse as HumanApiKeyResponse } from '../../domain/entities/api-key.entity';
 import { RetryStellarTxResponse } from '../../domain/entities/failed-stellar-tx.entity';
+import { CreatePassDto, CreatePassResponse, CreatePassOptions } from '../../domain/entities/pass.entity';
 
 @Injectable()
 export class AdminService {
@@ -35,6 +37,7 @@ export class AdminService {
     private readonly platformService: PlatformService,
     private readonly stellarQueue: StellarTransactionQueue,
     private readonly failedTxRepository: FailedStellarTxRepository,
+    private readonly userService: UserService,
   ) {}
 
 
@@ -551,6 +554,121 @@ export class AdminService {
   }
 
   /**
+   * Register a wallet's identity on-chain (admin-sponsored), routed through the
+   * serial Stellar transaction queue with retry/backoff and idempotency.
+   * On success persists the identity in Firestore (users collection).
+   */
+  async createPass(
+    dto: CreatePassDto,
+    options?: CreatePassOptions,
+  ): Promise<CreatePassResponse> {
+    const operation = 'register';
+
+    try {
+      this.logger.log(
+        `Creating pass (register) for wallet: ${dto.wallet}, source: ${dto.sourceAccount}`,
+      );
+
+      if (!this.stellarService.validateWalletAddress(dto.wallet)) {
+        return { success: false, message: 'Invalid wallet address format', error: 'Invalid wallet address format' };
+      }
+      if (!this.stellarService.validateWalletAddress(dto.sourceAccount)) {
+        return { success: false, message: 'Invalid source account format', error: 'Invalid source account format' };
+      }
+
+      // A wallet can only register once -> idempotency keyed on wallet:register
+      const idempotencyKey =
+        options?.idempotencyKey ??
+        crypto.createHash('sha256').update(`${dto.wallet}:${operation}`).digest('hex');
+
+      if (this.stellarQueue.hasInFlightKey(idempotencyKey)) {
+        this.logger.log(`Skipping duplicate in-flight register for key=${idempotencyKey}`);
+        return { success: true, skipped: true, message: 'Duplicate registration skipped (already in queue)' };
+      }
+
+      const unresolved = await this.failedTxRepository.findUnresolvedByIdempotencyKey(idempotencyKey);
+      if (unresolved) {
+        this.logger.log(`Skipping duplicate register for unresolved dead-letter key=${idempotencyKey}`);
+        return { success: true, skipped: true, message: 'Duplicate registration skipped (unresolved dead-letter exists)' };
+      }
+
+      const payload = {
+        name: dto.name,
+        surnames: dto.surnames,
+        sourceAccount: dto.sourceAccount,
+      };
+
+      const result = await this.stellarQueue.enqueue(
+        () =>
+          this.stellarService.submitRegisterWithRetry({
+            wallet: dto.wallet,
+            name: dto.name,
+            surnames: dto.surnames,
+            sourceAccount: dto.sourceAccount,
+          }),
+        idempotencyKey,
+      );
+
+      if (result.alreadyRegistered) {
+        this.logger.warn(`Wallet already registered on-chain: ${dto.wallet}`);
+        return {
+          success: false,
+          alreadyRegistered: true,
+          message: 'Wallet is already registered',
+          error: result.lastError,
+        };
+      }
+
+      if (result.success) {
+        this.logger.log(`Wallet registered on-chain: ${dto.wallet}, hash: ${result.transactionHash}`);
+
+        // Persist identity in Firestore (users collection). On-chain is the source
+        // of truth, so a Firestore failure must not fail the request.
+        try {
+          await this.userService.create({ walletAddress: dto.wallet, name: dto.name });
+        } catch (persistError) {
+          this.logger.error(
+            `On-chain register succeeded but Firestore persist failed for wallet=${dto.wallet}`,
+            persistError,
+          );
+        }
+
+        return {
+          success: true,
+          message: 'Identity registered on-chain',
+          transactionHash: result.transactionHash,
+          sourceAccount: dto.sourceAccount,
+        };
+      }
+
+      // Exhausted retries -> dead-letter for later retry via /admin/stellar/retry/:id
+      await this.failedTxRepository.create({
+        wallet: dto.wallet,
+        operation,
+        payload,
+        idempotencyKey,
+        attempts: result.attempts,
+        lastError: result.lastError ?? 'Unknown error',
+        resolved: false,
+        createdAt: new Date(),
+      });
+
+      return {
+        success: false,
+        message: `Failed to register identity: ${result.lastError}`,
+        error: result.lastError,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to create pass for wallet: ${dto.wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to register identity: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
    * Re-enqueue a dead-letter Stellar transaction for retry.
    */
   async retryFailedStellarTx(id: string): Promise<RetryStellarTxResponse> {
@@ -574,6 +692,47 @@ export class AdminService {
 
     await this.failedTxRepository.markRetried(id);
 
+    if (record.operation === 'register') {
+      const sourceAccount = record.payload.sourceAccount as string;
+      const name = record.payload.name as string;
+      const surnames = record.payload.surnames as string;
+
+      if (!sourceAccount || name === undefined || surnames === undefined) {
+        return {
+          success: false,
+          message: 'Dead-letter payload missing sourceAccount, name, or surnames',
+          error: 'INVALID_PAYLOAD',
+        };
+      }
+
+      const result = await this.stellarQueue.enqueue(() =>
+        this.stellarService.submitRegisterWithRetry({
+          wallet: record.wallet,
+          name,
+          surnames,
+          sourceAccount,
+        }),
+      );
+
+      if (result.success || result.alreadyRegistered) {
+        await this.failedTxRepository.markResolved(id, result.transactionHash);
+        return {
+          success: true,
+          message: result.alreadyRegistered
+            ? 'Wallet already registered on-chain; dead-letter resolved'
+            : 'Dead-letter register retried successfully',
+          transactionHash: result.transactionHash,
+        };
+      }
+
+      return {
+        success: false,
+        message: `Retry failed: ${result.lastError}`,
+        error: result.lastError,
+      };
+    }
+
+    // Default: upsert_verification (existing behavior)
     const sourceAccount = record.payload.sourceAccount as string;
     const status = record.payload.status as StatusType;
 

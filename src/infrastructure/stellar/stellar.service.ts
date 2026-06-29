@@ -157,9 +157,9 @@ export class StellarService implements PassportPort {
    */
   private createClient(address: string): StellarPassportClient {
     return new StellarPassportClient({
-      contractId: networks.testnet.contractId,
-      networkPassphrase: networks.testnet.networkPassphrase,
-      rpcUrl: "https://soroban-testnet.stellar.org",
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
       publicKey: address,
     });
   }
@@ -1052,6 +1052,68 @@ export class StellarService implements PassportPort {
     return { success: false, attempts: maxRetries, lastError };
   }
 
+  async submitRegisterWithRetry(params: {
+    wallet: string;
+    name: string;
+    surnames: string;
+    sourceAccount: string;
+  }): Promise<SubmitVerificationResult> {
+    const maxRetries = Number(
+      this.configService.get<string>('STELLAR_TX_MAX_RETRIES', '5'),
+    );
+    const backoffBaseMs = Number(
+      this.configService.get<string>('STELLAR_TX_BACKOFF_BASE_MS', '300'),
+    );
+
+    if (!this.adminKeypair) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError: 'Admin keypair not configured (STELLAR_ADMIN_SECRET_KEY)',
+      };
+    }
+
+    if (this.adminKeypair.publicKey() !== params.sourceAccount) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError:
+          'ADMIN_SOURCE_ACCOUNT does not match STELLAR_ADMIN_SECRET_KEY public key',
+      };
+    }
+
+    let lastError = 'Unknown error';
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const transactionHash = await this.buildSignAndSubmitRegister(params);
+        return { success: true, transactionHash, attempts: attempt };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Submit attempt ${attempt}/${maxRetries} failed for wallet=${params.wallet}: ${lastError}`,
+        );
+
+        if (this.isAlreadyRegisteredError(lastError)) {
+          return { success: false, attempts: attempt, lastError, alreadyRegistered: true };
+        }
+
+        if (!this.isRetriableError(lastError) || attempt === maxRetries) {
+          break;
+        }
+
+        const delayMs = backoffBaseMs * Math.pow(2, attempt - 1);
+        await this.sleep(delayMs);
+      }
+    }
+
+    this.logger.error(
+      `Exhausted retries for wallet=${params.wallet} operation=register: ${lastError}`,
+    );
+
+    return { success: false, attempts: maxRetries, lastError };
+  }
+
   private async buildSignAndSubmitVerification(params: {
     wallet: string;
     verification: Verification;
@@ -1091,6 +1153,49 @@ export class StellarService implements PassportPort {
       `Verification submitted on-chain for wallet=${params.wallet}, hash=${hash}`,
     );
     return hash;
+  }
+
+  private async buildSignAndSubmitRegister(params: {
+    wallet: string;
+    name: string;
+    surnames: string;
+    sourceAccount: string;
+  }): Promise<string> {
+    const client = new StellarPassportClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      publicKey: params.sourceAccount,
+      signTransaction: async (txXdr: string) => {
+        const tx = TransactionBuilder.fromXDR(txXdr, this.networkPassphrase);
+        tx.sign(this.adminKeypair!);
+        return { signedTxXdr: tx.toXDR() };
+      },
+    });
+
+    const assembledTx = await client.register(
+      { wallet: params.wallet, name: params.name, surnames: params.surnames },
+      { timeoutInSeconds: 120 },
+    );
+
+    const sent = await assembledTx.signAndSend();
+    const hash = sent.sendTransactionResponse?.hash;
+
+    if (!hash) {
+      throw new Error('Transaction submitted but no hash returned');
+    }
+
+    this.logger.log(`Register submitted on-chain for wallet=${params.wallet}, hash=${hash}`);
+    return hash;
+  }
+
+  private isAlreadyRegisteredError(errorMessage: string): boolean {
+    const lower = errorMessage.toLowerCase();
+    return (
+      lower.includes('alreadyregistered') ||
+      lower.includes('already registered') ||
+      /error\(contract,\s*#1\)/i.test(errorMessage)
+    );
   }
 
   private isRetriableError(errorMessage: string): boolean {
