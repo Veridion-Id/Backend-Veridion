@@ -1,7 +1,7 @@
 /**
  * Read-only port for identity data access.
  *
- * Intentionally narrower than PassportPort — exposes only the two
+ * Intentionally narrower than PassportPort. It exposes only the two
  * operations needed by the batch verification feature and excludes
  * all write/transaction-building methods.
  */
