@@ -135,6 +135,23 @@ FIREBASE_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
 
 # Add your other configuration variables here
 ```
+
+### Stellar Transaction Queue
+
+The Stellar submission path retries transient sequence, timeout, and network
+errors with bounded exponential backoff plus jitter so multiple failed
+submissions do not retry in lockstep against Horizon or Soroban RPC.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STELLAR_TX_MAX_RETRIES` | `5` | Maximum attempts before a transaction is dead-lettered. |
+| `STELLAR_TX_BACKOFF_BASE_MS` | `300` | Base delay used for exponential retry backoff. |
+| `STELLAR_TX_BACKOFF_MAX_MS` | `5000` | Upper bound for any single retry delay. |
+| `STELLAR_TX_BACKOFF_JITTER_RATIO` | `1` | Jitter amount from `0` (deterministic) to `1` (full jitter). |
+
+With the default full jitter, each retry waits for a random delay between `0`
+and the capped exponential delay. The cap keeps the retry window bounded while
+spreading concurrent retries to reduce thundering-herd bursts.
 ## 📖 API Documentation
 
 Once the application is running, visit:
