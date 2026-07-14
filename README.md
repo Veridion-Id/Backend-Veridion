@@ -1,4 +1,4 @@
-# Veridion Backend
+# Veridion Backend bomboclat
 
 A scalable NestJS backend application built with TypeScript and following Domain-Driven Design (DDD) principles with a layered architecture
 
