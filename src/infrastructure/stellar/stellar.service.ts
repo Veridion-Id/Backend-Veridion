@@ -14,12 +14,20 @@ import {
   contract,
   authorizeEntry
 } from '@stellar/stellar-sdk';
-import { 
+import {
   Client as StellarPassportClient,
   Verification,
   VerificationType,
-  networks
-} from '../../../packages/stellar-passport/src';
+  networks,
+} from '../../../packages/stellar-passport/src'
+import { SubmitVerificationResult } from '../../domain/entities/failed-stellar-tx.entity'
+import {
+  PassportPort,
+  PassportRegisterParams,
+  PassportTransactionResult,
+  PassportUpdateProfileParams,
+  PassportUpsertVerificationParams,
+} from '../../domain/ports/passport.port'
 
 
 export interface BuildTransactionResponse {
@@ -70,7 +78,7 @@ export interface StatusResponse {
 }
 
 @Injectable()
-export class StellarService {
+export class StellarService implements PassportPort {
   private readonly logger = new Logger(StellarService.name);
   private server: Horizon.Server;
   private rpcServer: rpc.Server;
@@ -149,9 +157,9 @@ export class StellarService {
    */
   private createClient(address: string): StellarPassportClient {
     return new StellarPassportClient({
-      contractId: networks.testnet.contractId,
-      networkPassphrase: networks.testnet.networkPassphrase,
-      rpcUrl: "https://soroban-testnet.stellar.org",
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
       publicKey: address,
     });
   }
@@ -258,6 +266,130 @@ export class StellarService {
       }
       
       throw new Error(`Failed to get verifications: ${errorMessage}`);
+    }
+  }
+
+  async register(params: PassportRegisterParams): Promise<PassportTransactionResult> {
+    const result = await this.buildRegisterTransaction(
+      params.wallet,
+      params.name,
+      params.surnames,
+      params.sourceAccount,
+    )
+    return this.toPassportTransactionResult(result)
+  }
+
+  async upsertVerification(
+    params: PassportUpsertVerificationParams,
+  ): Promise<PassportTransactionResult> {
+    const result = await this.buildCreateVerificationTransaction(
+      params.wallet,
+      params.verification,
+      params.sourceAccount,
+    )
+    return this.toPassportTransactionResult(result)
+  }
+
+  async updateProfile(
+    params: PassportUpdateProfileParams,
+  ): Promise<PassportTransactionResult> {
+    try {
+      this.logger.log(
+        `Building update profile transaction for wallet: ${params.wallet}, source: ${params.sourceAccount}`,
+      )
+
+      if (!this.validateWalletAddress(params.wallet)) {
+        return { success: false, error: 'Invalid wallet address format' }
+      }
+      if (!this.validateWalletAddress(params.sourceAccount)) {
+        return { success: false, error: 'Invalid source account format' }
+      }
+
+      const client = new StellarPassportClient({
+        contractId: this.contractId,
+        networkPassphrase: this.networkPassphrase,
+        rpcUrl: this.rpcUrl,
+        publicKey: params.sourceAccount,
+      })
+
+      const assembledTx = await client.update_profile(
+        {
+          wallet: params.wallet,
+          name: params.name,
+          surnames: params.surnames,
+        },
+        { timeoutInSeconds: 120 },
+      )
+
+      await assembledTx.simulate()
+      const xdrString = assembledTx.toXDR()
+      const parsedTransaction = TransactionBuilder.fromXDR(
+        xdrString,
+        this.networkPassphrase,
+      )
+      const sequence =
+        'sequence' in parsedTransaction ? parsedTransaction.sequence : '0'
+      const fee = parsedTransaction.fee
+      const timebounds =
+        'timeBounds' in parsedTransaction
+          ? parsedTransaction.timeBounds
+          : undefined
+
+      return {
+        success: true,
+        xdr: xdrString,
+        sourceAccount: params.sourceAccount,
+        sequence,
+        fee: String(fee),
+        timebounds: timebounds
+          ? {
+              minTime: timebounds.minTime.toString(),
+              maxTime: timebounds.maxTime.toString(),
+            }
+          : undefined,
+      }
+    } catch (error) {
+      this.logger.error('Error building update profile transaction:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  /**
+   * Check Stellar network reachability via Soroban RPC latest ledger.
+   */
+  async checkNetworkReachability(): Promise<{
+    reachable: boolean
+    network: string
+    error?: string
+  }> {
+    const network = this.configService.get<string>('STELLAR_NETWORK', 'testnet')
+    try {
+      await this.rpcServer.getLatestLedger()
+      return { reachable: true, network }
+    } catch (error) {
+      return {
+        reachable: false,
+        network,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  private toPassportTransactionResult(
+    result: BuildTransactionResponse,
+  ): PassportTransactionResult {
+    return {
+      success: result.success,
+      xdr: result.xdr,
+      sourceAccount: result.sourceAccount,
+      sequence: result.sequence,
+      fee: result.fee,
+      timebounds: result.timebounds,
+      footprint: result.footprint,
+      error: result.error,
     }
   }
 
@@ -859,6 +991,234 @@ export class StellarService {
    * Create a client and build a register transaction
    * This demonstrates how to use the createClient method
    */
+  /**
+   * Build, sign with admin keypair, and submit an upsert_verification transaction
+   * with automatic retry on transient sequence/RPC errors.
+   */
+  async submitVerificationWithRetry(params: {
+    wallet: string;
+    verification: Verification;
+    sourceAccount: string;
+  }): Promise<SubmitVerificationResult> {
+    const maxRetries = Number(
+      this.configService.get<string>('STELLAR_TX_MAX_RETRIES', '5'),
+    );
+    const backoffBaseMs = Number(
+      this.configService.get<string>('STELLAR_TX_BACKOFF_BASE_MS', '300'),
+    );
+
+    if (!this.adminKeypair) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError: 'Admin keypair not configured (STELLAR_ADMIN_SECRET_KEY)',
+      };
+    }
+
+    if (this.adminKeypair.publicKey() !== params.sourceAccount) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError:
+          'ADMIN_SOURCE_ACCOUNT does not match STELLAR_ADMIN_SECRET_KEY public key',
+      };
+    }
+
+    let lastError = 'Unknown error';
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const transactionHash = await this.buildSignAndSubmitVerification(params);
+        return { success: true, transactionHash, attempts: attempt };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Submit attempt ${attempt}/${maxRetries} failed for wallet=${params.wallet}: ${lastError}`,
+        );
+
+        if (!this.isRetriableError(lastError) || attempt === maxRetries) {
+          break;
+        }
+
+        const delayMs = backoffBaseMs * Math.pow(2, attempt - 1);
+        await this.sleep(delayMs);
+      }
+    }
+
+    this.logger.error(
+      `Exhausted retries for wallet=${params.wallet} operation=upsert_verification: ${lastError}`,
+    );
+
+    return { success: false, attempts: maxRetries, lastError };
+  }
+
+  async submitRegisterWithRetry(params: {
+    wallet: string;
+    name: string;
+    surnames: string;
+    sourceAccount: string;
+  }): Promise<SubmitVerificationResult> {
+    const maxRetries = Number(
+      this.configService.get<string>('STELLAR_TX_MAX_RETRIES', '5'),
+    );
+    const backoffBaseMs = Number(
+      this.configService.get<string>('STELLAR_TX_BACKOFF_BASE_MS', '300'),
+    );
+
+    if (!this.adminKeypair) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError: 'Admin keypair not configured (STELLAR_ADMIN_SECRET_KEY)',
+      };
+    }
+
+    if (this.adminKeypair.publicKey() !== params.sourceAccount) {
+      return {
+        success: false,
+        attempts: 0,
+        lastError:
+          'ADMIN_SOURCE_ACCOUNT does not match STELLAR_ADMIN_SECRET_KEY public key',
+      };
+    }
+
+    let lastError = 'Unknown error';
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const transactionHash = await this.buildSignAndSubmitRegister(params);
+        return { success: true, transactionHash, attempts: attempt };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Submit attempt ${attempt}/${maxRetries} failed for wallet=${params.wallet}: ${lastError}`,
+        );
+
+        if (this.isAlreadyRegisteredError(lastError)) {
+          return { success: false, attempts: attempt, lastError, alreadyRegistered: true };
+        }
+
+        if (!this.isRetriableError(lastError) || attempt === maxRetries) {
+          break;
+        }
+
+        const delayMs = backoffBaseMs * Math.pow(2, attempt - 1);
+        await this.sleep(delayMs);
+      }
+    }
+
+    this.logger.error(
+      `Exhausted retries for wallet=${params.wallet} operation=register: ${lastError}`,
+    );
+
+    return { success: false, attempts: maxRetries, lastError };
+  }
+
+  private async buildSignAndSubmitVerification(params: {
+    wallet: string;
+    verification: Verification;
+    sourceAccount: string;
+  }): Promise<string> {
+    const verificationType = this.convertToVerificationType(params.verification.vtype);
+
+    const client = new StellarPassportClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      publicKey: params.sourceAccount,
+      signTransaction: async (txXdr: string) => {
+        const tx = TransactionBuilder.fromXDR(txXdr, this.networkPassphrase);
+        tx.sign(this.adminKeypair!);
+        return { signedTxXdr: tx.toXDR() };
+      },
+    });
+
+    const assembledTx = await client.upsert_verification(
+      {
+        wallet: params.wallet,
+        vtype: verificationType,
+        points: params.verification.points,
+      },
+      { timeoutInSeconds: 120 },
+    );
+
+    const sent = await assembledTx.signAndSend();
+    const hash = sent.sendTransactionResponse?.hash;
+
+    if (!hash) {
+      throw new Error('Transaction submitted but no hash returned');
+    }
+
+    this.logger.log(
+      `Verification submitted on-chain for wallet=${params.wallet}, hash=${hash}`,
+    );
+    return hash;
+  }
+
+  private async buildSignAndSubmitRegister(params: {
+    wallet: string;
+    name: string;
+    surnames: string;
+    sourceAccount: string;
+  }): Promise<string> {
+    const client = new StellarPassportClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      publicKey: params.sourceAccount,
+      signTransaction: async (txXdr: string) => {
+        const tx = TransactionBuilder.fromXDR(txXdr, this.networkPassphrase);
+        tx.sign(this.adminKeypair!);
+        return { signedTxXdr: tx.toXDR() };
+      },
+    });
+
+    const assembledTx = await client.register(
+      { wallet: params.wallet, name: params.name, surnames: params.surnames },
+      { timeoutInSeconds: 120 },
+    );
+
+    const sent = await assembledTx.signAndSend();
+    const hash = sent.sendTransactionResponse?.hash;
+
+    if (!hash) {
+      throw new Error('Transaction submitted but no hash returned');
+    }
+
+    this.logger.log(`Register submitted on-chain for wallet=${params.wallet}, hash=${hash}`);
+    return hash;
+  }
+
+  private isAlreadyRegisteredError(errorMessage: string): boolean {
+    const lower = errorMessage.toLowerCase();
+    return (
+      lower.includes('alreadyregistered') ||
+      lower.includes('already registered') ||
+      /error\(contract,\s*#1\)/i.test(errorMessage)
+    );
+  }
+
+  private isRetriableError(errorMessage: string): boolean {
+    const lower = errorMessage.toLowerCase();
+    return (
+      lower.includes('tx_bad_seq') ||
+      lower.includes('bad sequence') ||
+      lower.includes('sequence number') ||
+      lower.includes('timeout') ||
+      lower.includes('timed out') ||
+      lower.includes('econnreset') ||
+      lower.includes('econnrefused') ||
+      lower.includes('network') ||
+      lower.includes('503') ||
+      lower.includes('502') ||
+      lower.includes('504')
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   async createClientAndBuildRegisterTransaction(
     wallet: string,
     name: string,

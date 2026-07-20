@@ -1,14 +1,92 @@
-import { IsString, IsNotEmpty, IsEnum, IsOptional, IsObject, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
-// Veriff webhook decision types
 export enum VeriffDecision {
   APPROVED = 'APPROVED',
   DECLINED = 'DECLINED',
-  RESUBMISSION_REQUESTED = 'RESUBMISSION_REQUESTED'
+  RESUBMISSION_REQUESTED = 'RESUBMISSION_REQUESTED',
 }
 
-// Veriff webhook payload structure
+export class VeriffPersonDto {
+  @IsString()
+  @IsNotEmpty()
+  firstName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  lastName: string;
+}
+
+export class VeriffDocumentDto {
+  @IsString()
+  @IsNotEmpty()
+  type: string;
+
+  @IsString()
+  @IsNotEmpty()
+  number: string;
+
+  @IsString()
+  @IsNotEmpty()
+  validFrom: string;
+
+  @IsString()
+  @IsNotEmpty()
+  validUntil: string;
+}
+
+export class VeriffAdditionalVerificationDto {
+  @IsString()
+  @IsNotEmpty()
+  status: string;
+
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
+}
+
+export class VeriffVerificationDto {
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @IsString()
+  @IsNotEmpty()
+  url: string;
+
+  @IsString()
+  @IsNotEmpty()
+  vendorData: string;
+
+  @IsString()
+  @IsNotEmpty()
+  status: string;
+
+  @IsString()
+  @IsNotEmpty()
+  code: string;
+
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
+
+  @IsString()
+  @IsNotEmpty()
+  reasonCode: string;
+
+  @ValidateNested()
+  @Type(() => VeriffPersonDto)
+  person: VeriffPersonDto;
+
+  @ValidateNested()
+  @Type(() => VeriffDocumentDto)
+  document: VeriffDocumentDto;
+
+  @ValidateNested()
+  @Type(() => VeriffAdditionalVerificationDto)
+  additionalVerification: VeriffAdditionalVerificationDto;
+}
+
 export class VeriffWebhookDto {
   @IsString()
   @IsNotEmpty()
@@ -34,31 +112,9 @@ export class VeriffWebhookDto {
   @IsNotEmpty()
   sessionToken: string;
 
-  @IsString()
-  @IsNotEmpty()
-  verification: {
-    id: string;
-    url: string;
-    vendorData: string;
-    status: string;
-    code: string;
-    reason: string;
-    reasonCode: string;
-    person: {
-      firstName: string;
-      lastName: string;
-    };
-    document: {
-      type: string;
-      number: string;
-      validFrom: string;
-      validUntil: string;
-    };
-    additionalVerification: {
-      status: string;
-      reason: string;
-    };
-  };
+  @ValidateNested()
+  @Type(() => VeriffVerificationDto)
+  verification: VeriffVerificationDto;
 
   @IsString()
   @IsNotEmpty()
@@ -69,7 +125,6 @@ export class VeriffWebhookDto {
   timestamp: string;
 }
 
-// Response for webhook processing
 export interface VeriffWebhookResponse {
   success: boolean;
   message?: string;
@@ -78,7 +133,6 @@ export interface VeriffWebhookResponse {
   wallet?: string;
 }
 
-// Veriff configuration
 export interface VeriffConfig {
   webhookSecret: string;
   baseUrl: string;

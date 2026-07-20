@@ -1,6 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { StellarService, StatusType as StellarStatusType, StatusUpdateResponse, StatusResponse } from './stellar.service';
+import * as crypto from 'crypto';
+import {
+  StellarService,
+  StatusType as StellarStatusType,
+  StatusUpdateResponse,
+  StatusResponse,
+} from '../../infrastructure/stellar/stellar.service'
 import { PlatformService } from './platform.service';
+import { UserService } from './user.service';
+import { StellarTransactionQueue } from './stellar-transaction-queue.service';
+import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
 import { 
   BuildRegisterTransactionDto,
   BuildRegisterTransactionResponse,
@@ -12,9 +21,12 @@ import {
   StatusType,
   GetStatusResponse,
   UpdateStatusDto,
-  UpdateStatusResponse
+  UpdateStatusResponse,
+  UpdateStatusOptions
 } from '../../domain/entities/admin.entity';
 import { ApiKeyRequestDto, ApiKeyResponse as HumanApiKeyResponse } from '../../domain/entities/api-key.entity';
+import { RetryStellarTxResponse } from '../../domain/entities/failed-stellar-tx.entity';
+import { CreatePassDto, CreatePassResponse, CreatePassOptions } from '../../domain/entities/pass.entity';
 
 @Injectable()
 export class AdminService {
@@ -22,7 +34,10 @@ export class AdminService {
 
   constructor(
     private readonly stellarService: StellarService,
-    private readonly platformService: PlatformService
+    private readonly platformService: PlatformService,
+    private readonly stellarQueue: StellarTransactionQueue,
+    private readonly failedTxRepository: FailedStellarTxRepository,
+    private readonly userService: UserService,
   ) {}
 
 
@@ -396,83 +411,368 @@ export class AdminService {
   }
 
   /**
-   * Update user status by creating a Custom verification
-   * Creates a verification with Custom type containing the status
+   * Update user status by submitting an upsert_verification transaction on-chain.
+   * Routed through the serial Stellar transaction queue with optional idempotency.
    */
-  async updateStatus(wallet: string, updateDto: UpdateStatusDto): Promise<UpdateStatusResponse> {
-    try {
-      this.logger.log(`Updating status for wallet: ${wallet}, status: ${updateDto.status}, source: ${updateDto.sourceAccount}`);
+  async updateStatus(
+    wallet: string,
+    updateDto: UpdateStatusDto,
+    options?: UpdateStatusOptions,
+  ): Promise<UpdateStatusResponse> {
+    const operation = 'upsert_verification';
 
-      // Validate wallet address format
+    try {
+      this.logger.log(
+        `Updating status for wallet: ${wallet}, status: ${updateDto.status}, source: ${updateDto.sourceAccount}`,
+      );
+
       if (!this.stellarService.validateWalletAddress(wallet)) {
         return {
           success: false,
           message: 'Invalid wallet address format',
-          error: 'Invalid wallet address format'
+          error: 'Invalid wallet address format',
         };
       }
 
-      // Validate source account format
       if (!this.stellarService.validateWalletAddress(updateDto.sourceAccount)) {
         return {
           success: false,
           message: 'Invalid source account format',
-          error: 'Invalid source account format'
+          error: 'Invalid source account format',
         };
       }
 
-      // Validate status type
       if (!['APPROVED', 'PENDING', 'REJECTED'].includes(updateDto.status)) {
         return {
           success: false,
           message: 'Invalid status type. Must be APPROVED, PENDING, or REJECTED',
-          error: 'Invalid status type'
+          error: 'Invalid status type',
         };
       }
 
-      // Create a verification object with Custom type containing the status
+      const idempotencyKey =
+        options?.idempotencyKey ??
+        (options?.sessionToken
+          ? crypto
+              .createHash('sha256')
+              .update(`${wallet}:${operation}:${options.sessionToken}`)
+              .digest('hex')
+          : undefined);
+
+      if (idempotencyKey) {
+        if (this.stellarQueue.hasInFlightKey(idempotencyKey)) {
+          this.logger.log(
+            `Skipping duplicate in-flight submission for key=${idempotencyKey}`,
+          );
+          return {
+            success: true,
+            skipped: true,
+            message: 'Duplicate submission skipped (already in queue)',
+          };
+        }
+
+        const unresolved =
+          await this.failedTxRepository.findUnresolvedByIdempotencyKey(
+            idempotencyKey,
+          );
+        if (unresolved) {
+          this.logger.log(
+            `Skipping duplicate submission for unresolved dead-letter key=${idempotencyKey}`,
+          );
+          return {
+            success: true,
+            skipped: true,
+            message: 'Duplicate submission skipped (unresolved dead-letter exists)',
+          };
+        }
+      }
+
       const verification = {
-        issuer: 'admin', // Default issuer for admin-created verifications
-        points: 0, // Status verifications don't need points
+        issuer: 'admin',
+        points: 0,
         timestamp: BigInt(Date.now()),
-        vtype: { tag: 'Custom', values: [updateDto.status] } as any
+        vtype: { tag: 'Custom', values: [updateDto.status] } as any,
       };
 
-      // Call the stellar service to build the transaction
-      const result = await this.stellarService.buildCreateVerificationTransaction(
-        wallet,
-        verification,
-        updateDto.sourceAccount
+      const payload = {
+        status: updateDto.status,
+        sourceAccount: updateDto.sourceAccount,
+        sessionToken: options?.sessionToken,
+      };
+
+      const result = await this.stellarQueue.enqueue(
+        () =>
+          this.stellarService.submitVerificationWithRetry({
+            wallet,
+            verification,
+            sourceAccount: updateDto.sourceAccount,
+          }),
+        idempotencyKey,
       );
 
       if (result.success) {
-        this.logger.log(`Status update transaction built successfully for wallet: ${wallet}, status: ${updateDto.status}`);
+        this.logger.log(
+          `Status updated on-chain for wallet: ${wallet}, status: ${updateDto.status}, hash: ${result.transactionHash}`,
+        );
         return {
           success: true,
-          message: `Status update transaction built successfully for ${updateDto.status}`,
-          xdr: result.xdr,
-          sourceAccount: result.sourceAccount,
-          sequence: result.sequence,
-          fee: result.fee,
-          timebounds: result.timebounds,
-          footprint: result.footprint
-        };
-      } else {
-        return {
-          success: false,
-          message: `Failed to build status update transaction: ${result.error}`,
-          error: result.error
+          message: `Status updated on-chain: ${updateDto.status}`,
+          transactionHash: result.transactionHash,
+          sourceAccount: updateDto.sourceAccount,
         };
       }
 
-    } catch (error) {
-      this.logger.error(`Failed to build status update transaction for wallet: ${wallet}, status: ${updateDto.status}`, error);
+      if (idempotencyKey) {
+        await this.failedTxRepository.create({
+          wallet,
+          operation,
+          payload,
+          idempotencyKey,
+          attempts: result.attempts,
+          lastError: result.lastError ?? 'Unknown error',
+          resolved: false,
+          createdAt: new Date(),
+        });
+      }
+
       return {
         success: false,
-        message: `Failed to build status update transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        message: `Failed to submit status update: ${result.lastError}`,
+        error: result.lastError,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to update status for wallet: ${wallet}, status: ${updateDto.status}`,
+        error,
+      );
+      return {
+        success: false,
+        message: `Failed to update status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Register a wallet's identity on-chain (admin-sponsored), routed through the
+   * serial Stellar transaction queue with retry/backoff and idempotency.
+   * On success persists the identity in Firestore (users collection).
+   */
+  async createPass(
+    dto: CreatePassDto,
+    options?: CreatePassOptions,
+  ): Promise<CreatePassResponse> {
+    const operation = 'register';
+
+    try {
+      this.logger.log(
+        `Creating pass (register) for wallet: ${dto.wallet}, source: ${dto.sourceAccount}`,
+      );
+
+      if (!this.stellarService.validateWalletAddress(dto.wallet)) {
+        return { success: false, message: 'Invalid wallet address format', error: 'Invalid wallet address format' };
+      }
+      if (!this.stellarService.validateWalletAddress(dto.sourceAccount)) {
+        return { success: false, message: 'Invalid source account format', error: 'Invalid source account format' };
+      }
+
+      // A wallet can only register once -> idempotency keyed on wallet:register
+      const idempotencyKey =
+        options?.idempotencyKey ??
+        crypto.createHash('sha256').update(`${dto.wallet}:${operation}`).digest('hex');
+
+      if (this.stellarQueue.hasInFlightKey(idempotencyKey)) {
+        this.logger.log(`Skipping duplicate in-flight register for key=${idempotencyKey}`);
+        return { success: true, skipped: true, message: 'Duplicate registration skipped (already in queue)' };
+      }
+
+      const unresolved = await this.failedTxRepository.findUnresolvedByIdempotencyKey(idempotencyKey);
+      if (unresolved) {
+        this.logger.log(`Skipping duplicate register for unresolved dead-letter key=${idempotencyKey}`);
+        return { success: true, skipped: true, message: 'Duplicate registration skipped (unresolved dead-letter exists)' };
+      }
+
+      const payload = {
+        name: dto.name,
+        surnames: dto.surnames,
+        sourceAccount: dto.sourceAccount,
+      };
+
+      const result = await this.stellarQueue.enqueue(
+        () =>
+          this.stellarService.submitRegisterWithRetry({
+            wallet: dto.wallet,
+            name: dto.name,
+            surnames: dto.surnames,
+            sourceAccount: dto.sourceAccount,
+          }),
+        idempotencyKey,
+      );
+
+      if (result.alreadyRegistered) {
+        this.logger.warn(`Wallet already registered on-chain: ${dto.wallet}`);
+        return {
+          success: false,
+          alreadyRegistered: true,
+          message: 'Wallet is already registered',
+          error: result.lastError,
+        };
+      }
+
+      if (result.success) {
+        this.logger.log(`Wallet registered on-chain: ${dto.wallet}, hash: ${result.transactionHash}`);
+
+        // Persist identity in Firestore (users collection). On-chain is the source
+        // of truth, so a Firestore failure must not fail the request.
+        try {
+          await this.userService.create({ walletAddress: dto.wallet, name: dto.name });
+        } catch (persistError) {
+          this.logger.error(
+            `On-chain register succeeded but Firestore persist failed for wallet=${dto.wallet}`,
+            persistError,
+          );
+        }
+
+        return {
+          success: true,
+          message: 'Identity registered on-chain',
+          transactionHash: result.transactionHash,
+          sourceAccount: dto.sourceAccount,
+        };
+      }
+
+      // Exhausted retries -> dead-letter for later retry via /admin/stellar/retry/:id
+      await this.failedTxRepository.create({
+        wallet: dto.wallet,
+        operation,
+        payload,
+        idempotencyKey,
+        attempts: result.attempts,
+        lastError: result.lastError ?? 'Unknown error',
+        resolved: false,
+        createdAt: new Date(),
+      });
+
+      return {
+        success: false,
+        message: `Failed to register identity: ${result.lastError}`,
+        error: result.lastError,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to create pass for wallet: ${dto.wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to register identity: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * Re-enqueue a dead-letter Stellar transaction for retry.
+   */
+  async retryFailedStellarTx(id: string): Promise<RetryStellarTxResponse> {
+    const record = await this.failedTxRepository.findById(id);
+
+    if (!record) {
+      return {
+        success: false,
+        message: 'Dead-letter record not found',
+        error: 'NOT_FOUND',
+      };
+    }
+
+    if (record.resolved || record.resolvedAt) {
+      return {
+        success: false,
+        message: 'Dead-letter record already resolved',
+        error: 'ALREADY_RESOLVED',
+      };
+    }
+
+    await this.failedTxRepository.markRetried(id);
+
+    if (record.operation === 'register') {
+      const sourceAccount = record.payload.sourceAccount as string;
+      const name = record.payload.name as string;
+      const surnames = record.payload.surnames as string;
+
+      if (!sourceAccount || name === undefined || surnames === undefined) {
+        return {
+          success: false,
+          message: 'Dead-letter payload missing sourceAccount, name, or surnames',
+          error: 'INVALID_PAYLOAD',
+        };
+      }
+
+      const result = await this.stellarQueue.enqueue(() =>
+        this.stellarService.submitRegisterWithRetry({
+          wallet: record.wallet,
+          name,
+          surnames,
+          sourceAccount,
+        }),
+      );
+
+      if (result.success || result.alreadyRegistered) {
+        await this.failedTxRepository.markResolved(id, result.transactionHash);
+        return {
+          success: true,
+          message: result.alreadyRegistered
+            ? 'Wallet already registered on-chain; dead-letter resolved'
+            : 'Dead-letter register retried successfully',
+          transactionHash: result.transactionHash,
+        };
+      }
+
+      return {
+        success: false,
+        message: `Retry failed: ${result.lastError}`,
+        error: result.lastError,
+      };
+    }
+
+    // Default: upsert_verification (existing behavior)
+    const sourceAccount = record.payload.sourceAccount as string;
+    const status = record.payload.status as StatusType;
+
+    if (!sourceAccount || !status) {
+      return {
+        success: false,
+        message: 'Dead-letter payload missing sourceAccount or status',
+        error: 'INVALID_PAYLOAD',
+      };
+    }
+
+    const verification = {
+      issuer: 'admin',
+      points: 0,
+      timestamp: BigInt(Date.now()),
+      vtype: { tag: 'Custom', values: [status] } as any,
+    };
+
+    const result = await this.stellarQueue.enqueue(() =>
+      this.stellarService.submitVerificationWithRetry({
+        wallet: record.wallet,
+        verification,
+        sourceAccount,
+      }),
+    );
+
+    if (result.success) {
+      await this.failedTxRepository.markResolved(id, result.transactionHash);
+      return {
+        success: true,
+        message: 'Dead-letter transaction retried successfully',
+        transactionHash: result.transactionHash,
+      };
+    }
+
+    return {
+      success: false,
+      message: `Retry failed: ${result.lastError}`,
+      error: result.lastError,
+    };
   }
 
 }

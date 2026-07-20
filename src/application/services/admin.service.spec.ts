@@ -1,27 +1,54 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AdminService } from './admin.service';
-import { StellarService } from './stellar.service';
+import { StellarService } from '../../infrastructure/stellar/stellar.service'
 import { PlatformService } from './platform.service';
+import { StellarTransactionQueue } from './stellar-transaction-queue.service';
+import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
+import { UserService } from './user.service';
 import { 
   BuildRegisterTransactionDto,
   SubmitSignedTransactionDto,
   BuildCreateVerificationTransactionDto
 } from '../../domain/entities/admin.entity';
+import { CreatePassDto } from '../../domain/entities/pass.entity';
 
 describe('AdminService', () => {
   let service: AdminService;
   let stellarService: jest.Mocked<StellarService>;
   let platformService: jest.Mocked<PlatformService>;
+  let failedTxRepository: jest.Mocked<FailedStellarTxRepository>;
+  let userService: jest.Mocked<UserService>;
 
   beforeEach(async () => {
     const mockStellarService = {
       buildRegisterTransaction: jest.fn(),
       submitSignedTransaction: jest.fn(),
       buildCreateVerificationTransaction: jest.fn(),
+      validateWalletAddress: jest.fn().mockReturnValue(true),
+      submitRegisterWithRetry: jest.fn(),
+    };
+
+    const mockUserService = {
+      create: jest.fn(),
     };
 
     const mockPlatformService = {
       isHuman: jest.fn(),
+    };
+
+    const mockStellarQueue = {
+      enqueue: jest.fn((job: () => Promise<unknown>) => job()),
+      hasInFlightKey: jest.fn().mockReturnValue(false),
+      trackInFlightKey: jest.fn(),
+      untrackInFlightKey: jest.fn(),
+    };
+
+    const mockFailedTxRepository = {
+      create: jest.fn(),
+      findById: jest.fn(),
+      findUnresolvedByIdempotencyKey: jest.fn().mockResolvedValue(null),
+      markRetried: jest.fn(),
+      markResolved: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -35,12 +62,26 @@ describe('AdminService', () => {
           provide: PlatformService,
           useValue: mockPlatformService,
         },
+        {
+          provide: StellarTransactionQueue,
+          useValue: mockStellarQueue,
+        },
+        {
+          provide: FailedStellarTxRepository,
+          useValue: mockFailedTxRepository,
+        },
+        {
+          provide: UserService,
+          useValue: mockUserService,
+        },
       ],
     }).compile();
 
     service = module.get<AdminService>(AdminService);
     stellarService = module.get(StellarService);
     platformService = module.get(PlatformService);
+    failedTxRepository = module.get(FailedStellarTxRepository);
+    userService = module.get(UserService);
 
     jest.clearAllMocks();
   });
@@ -224,7 +265,11 @@ describe('AdminService', () => {
 
       expect(stellarService.buildCreateVerificationTransaction).toHaveBeenCalledWith(
         buildDto.wallet,
-        { type: buildDto.verificationType, points: buildDto.points },
+        expect.objectContaining({
+          issuer: 'admin',
+          points: buildDto.points,
+          vtype: { tag: 'Custom', values: [buildDto.verificationType] },
+        }),
         buildDto.sourceAccount
       );
       expect(result).toEqual({
@@ -367,6 +412,136 @@ describe('AdminService', () => {
       expect(result.success).toBe(false);
       expect(result.message).toBe('Failed to generate API key: Network error');
       expect(result.error).toBe('Network error');
+    });
+  });
+
+  describe('createPass', () => {
+    const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+    const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
+
+    it('registers a wallet on-chain and persists the identity', async () => {
+      const dto: CreatePassDto = {
+        wallet,
+        sourceAccount,
+        name: 'John',
+        surnames: 'Doe',
+      };
+
+      stellarService.submitRegisterWithRetry.mockResolvedValue({
+        success: true,
+        transactionHash: 'tx-hash-123',
+        attempts: 1,
+      });
+      userService.create.mockResolvedValue({} as any);
+
+      const result = await service.createPass(dto);
+
+      expect(stellarService.submitRegisterWithRetry).toHaveBeenCalledWith({
+        wallet,
+        name: 'John',
+        surnames: 'Doe',
+        sourceAccount,
+      });
+      expect(userService.create).toHaveBeenCalledWith({
+        walletAddress: wallet,
+        name: 'John',
+      });
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          transactionHash: 'tx-hash-123',
+        }),
+      );
+      expect(failedTxRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('returns alreadyRegistered (409 signal) without dead-lettering', async () => {
+      const dto: CreatePassDto = {
+        wallet,
+        sourceAccount,
+        name: 'John',
+        surnames: 'Doe',
+      };
+
+      stellarService.submitRegisterWithRetry.mockResolvedValue({
+        success: false,
+        alreadyRegistered: true,
+        attempts: 1,
+        lastError: 'AlreadyRegistered',
+      });
+
+      const result = await service.createPass(dto);
+
+      expect(result.success).toBe(false);
+      expect(result.alreadyRegistered).toBe(true);
+      expect(failedTxRepository.create).not.toHaveBeenCalled();
+      expect(userService.create).not.toHaveBeenCalled();
+    });
+
+    it('dead-letters after exhausted retries', async () => {
+      const dto: CreatePassDto = {
+        wallet,
+        sourceAccount,
+        name: 'John',
+        surnames: 'Doe',
+      };
+
+      stellarService.submitRegisterWithRetry.mockResolvedValue({
+        success: false,
+        attempts: 5,
+        lastError: 'network error',
+      });
+
+      const result = await service.createPass(dto);
+
+      expect(failedTxRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          wallet,
+          operation: 'register',
+          resolved: false,
+        }),
+      );
+      expect(result.success).toBe(false);
+      expect(result.alreadyRegistered).toBeFalsy();
+    });
+  });
+
+  describe('retryFailedStellarTx (register)', () => {
+    it('retries a dead-lettered register operation and marks it resolved', async () => {
+      const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+      const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
+
+      failedTxRepository.findById.mockResolvedValue({
+        id: 'rec1',
+        wallet,
+        operation: 'register',
+        payload: {
+          sourceAccount,
+          name: 'John',
+          surnames: 'Doe',
+        },
+        idempotencyKey: 'k',
+        attempts: 5,
+        lastError: 'network error',
+        resolved: false,
+        createdAt: new Date(),
+      } as any);
+      stellarService.submitRegisterWithRetry.mockResolvedValue({
+        success: true,
+        transactionHash: 'retry-hash',
+        attempts: 1,
+      });
+
+      const result = await service.retryFailedStellarTx('rec1');
+
+      expect(stellarService.submitRegisterWithRetry).toHaveBeenCalledWith({
+        wallet,
+        name: 'John',
+        surnames: 'Doe',
+        sourceAccount,
+      });
+      expect(failedTxRepository.markResolved).toHaveBeenCalledWith('rec1', 'retry-hash');
+      expect(result.success).toBe(true);
     });
   });
 });

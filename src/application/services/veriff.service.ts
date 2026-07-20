@@ -77,10 +77,14 @@ export class VeriffService {
       }
 
       // Update user status
-      const updateResult = await this.adminService.updateStatus(wallet, {
-        status: status,
-        sourceAccount: adminSourceAccount
-      });
+      const updateResult = await this.adminService.updateStatus(
+        wallet,
+        {
+          status: status,
+          sourceAccount: adminSourceAccount,
+        },
+        { sessionToken: webhookData.sessionToken },
+      );
 
       if (!updateResult.success) {
         this.logger.error(`Failed to update status for wallet: ${wallet}, error: ${updateResult.error}`);

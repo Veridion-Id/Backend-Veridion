@@ -130,5 +130,12 @@ export interface UpdateStatusResponse {
     maxTime: string;
   };
   footprint?: string;
+  transactionHash?: string;
+  skipped?: boolean;
   error?: string;
+}
+
+export interface UpdateStatusOptions {
+  sessionToken?: string;
+  idempotencyKey?: string;
 }
