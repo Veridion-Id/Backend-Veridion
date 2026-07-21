@@ -28,6 +28,8 @@ describe('StellarService submitVerificationWithRetry', () => {
               if (key === 'STELLAR_ADMIN_SECRET_KEY') return adminKeypair.secret();
               if (key === 'STELLAR_TX_MAX_RETRIES') return '5';
               if (key === 'STELLAR_TX_BACKOFF_BASE_MS') return '10';
+              if (key === 'STELLAR_TX_BACKOFF_MAX_MS') return '100';
+              if (key === 'STELLAR_TX_BACKOFF_JITTER_RATIO') return '1';
               return defaultValue;
             }),
           },
@@ -38,11 +40,20 @@ describe('StellarService submitVerificationWithRetry', () => {
     service = module.get(StellarService);
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('retries on tx_bad_seq and succeeds on second attempt', async () => {
     const buildSpy = jest
       .spyOn(service as any, 'buildSignAndSubmitVerification')
       .mockRejectedValueOnce(new Error('tx_bad_seq'))
       .mockResolvedValueOnce('hash-retry-success');
+    const sleepSpy = jest
+      .spyOn(service as any, 'sleep')
+      .mockResolvedValue(undefined);
+
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const result = await service.submitVerificationWithRetry({
       wallet: 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890',
@@ -59,12 +70,16 @@ describe('StellarService submitVerificationWithRetry', () => {
     expect(result.transactionHash).toBe('hash-retry-success');
     expect(result.attempts).toBe(2);
     expect(buildSpy).toHaveBeenCalledTimes(2);
+    expect(sleepSpy).toHaveBeenCalledWith(5);
   });
 
   it('returns failure after max retries exhausted', async () => {
     jest
       .spyOn(service as any, 'buildSignAndSubmitVerification')
       .mockRejectedValue(new Error('tx_bad_seq'));
+    const sleepSpy = jest
+      .spyOn(service as any, 'sleep')
+      .mockResolvedValue(undefined);
 
     const result = await service.submitVerificationWithRetry({
       wallet: 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890',
@@ -80,12 +95,16 @@ describe('StellarService submitVerificationWithRetry', () => {
     expect(result.success).toBe(false);
     expect(result.attempts).toBe(5);
     expect(result.lastError).toContain('tx_bad_seq');
+    expect(sleepSpy).toHaveBeenCalledTimes(4);
   });
 
   it('does not retry permanent errors', async () => {
     const buildSpy = jest
       .spyOn(service as any, 'buildSignAndSubmitVerification')
       .mockRejectedValue(new Error('function_trapped'));
+    const sleepSpy = jest
+      .spyOn(service as any, 'sleep')
+      .mockResolvedValue(undefined);
 
     const result = await service.submitVerificationWithRetry({
       wallet: 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890',
@@ -101,6 +120,41 @@ describe('StellarService submitVerificationWithRetry', () => {
     expect(result.success).toBe(false);
     expect(result.attempts).toBe(5);
     expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(sleepSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps retry backoff deterministic when jitter is disabled', () => {
+    const delay = (service as any).calculateRetryDelayMs(3, {
+      baseMs: 100,
+      maxMs: 1000,
+      jitterRatio: 0,
+    });
+
+    expect(delay).toBe(400);
+  });
+
+  it('applies full jitter within the configured maximum delay', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.25);
+
+    const delay = (service as any).calculateRetryDelayMs(4, {
+      baseMs: 100,
+      maxMs: 500,
+      jitterRatio: 1,
+    });
+
+    expect(delay).toBe(125);
+  });
+
+  it('keeps partial jitter inside the expected bounded range', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const delay = (service as any).calculateRetryDelayMs(2, {
+      baseMs: 200,
+      maxMs: 1000,
+      jitterRatio: 0.25,
+    });
+
+    expect(delay).toBe(350);
   });
 });
 
