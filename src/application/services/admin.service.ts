@@ -5,12 +5,12 @@ import {
   StatusType as StellarStatusType,
   StatusUpdateResponse,
   StatusResponse,
-} from '../../infrastructure/stellar/stellar.service'
+} from '../../infrastructure/stellar/stellar.service';
 import { PlatformService } from './platform.service';
 import { UserService } from './user.service';
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
-import { 
+import {
   BuildRegisterTransactionDto,
   BuildRegisterTransactionResponse,
   SubmitSignedTransactionDto,
@@ -26,7 +26,14 @@ import {
 } from '../../domain/entities/admin.entity';
 import { ApiKeyRequestDto, ApiKeyResponse as HumanApiKeyResponse } from '../../domain/entities/api-key.entity';
 import { RetryStellarTxResponse } from '../../domain/entities/failed-stellar-tx.entity';
-import { CreatePassDto, CreatePassResponse, CreatePassOptions } from '../../domain/entities/pass.entity';
+import { 
+  CreatePassDto, 
+  CreatePassResponse, 
+  CreatePassOptions,
+  UpdateProfileDto,
+  UpdateProfileResponse,
+  UpdateProfileOptions 
+} from '../../domain/entities/pass.entity';
 
 @Injectable()
 export class AdminService {
@@ -40,7 +47,6 @@ export class AdminService {
     private readonly userService: UserService,
   ) {}
 
-
   /**
    * Build a transaction for user registration (BUILD phase)
    * Creates an unsigned XDR transaction that the client can sign
@@ -50,15 +56,16 @@ export class AdminService {
   ): Promise<BuildRegisterTransactionResponse> {
     try {
       this.logger.log(`Building register transaction for wallet: ${buildDto.wallet}, source account: ${buildDto.sourceAccount}`);
-
-      // Call the stellar service to build the transaction
+      
       const result = await this.stellarService.buildRegisterTransaction(
         buildDto.wallet,
         buildDto.name,
         buildDto.surnames,
         buildDto.sourceAccount
       );
+      
       this.logger.log(buildDto);
+      
       if (result.success) {
         this.logger.log(`Transaction built successfully for wallet: ${buildDto.wallet}`);
         return {
@@ -78,7 +85,6 @@ export class AdminService {
           error: result.error
         };
       }
-
     } catch (error) {
       this.logger.error(`Failed to build register transaction for wallet: ${buildDto.wallet}`, error);
       return {
@@ -98,10 +104,9 @@ export class AdminService {
   ): Promise<SubmitSignedTransactionResponse> {
     try {
       this.logger.log('Submitting signed transaction');
-
-      // Call the stellar service to submit the transaction
+      
       const result = await this.stellarService.submitSignedTransaction(submitDto.signedXdr);
-
+      
       if (result.success) {
         this.logger.log(`Transaction submitted successfully. Hash: ${result.transactionHash}`);
         return {
@@ -111,19 +116,17 @@ export class AdminService {
           resultMeta: result.resultMeta
         };
       } else {
-        // Provide helpful error message for sequence issues
         const message = result.error?.includes('sequence') && result.error?.includes('outdated')
           ? `Failed to submit transaction: ${result.error}. Please call the build endpoint again to get a new transaction with the current sequence number.`
           : `Failed to submit transaction: ${result.error}`;
-        
+          
         return {
           success: false,
           message: message,
           error: result.error,
-          rebuiltXdr: result.rebuiltXdr // Pass through the rebuilt XDR if available
+          rebuiltXdr: result.rebuiltXdr
         };
       }
-
     } catch (error) {
       this.logger.error('Failed to submit signed transaction', error);
       return {
@@ -143,22 +146,20 @@ export class AdminService {
   ): Promise<BuildCreateVerificationTransactionResponse> {
     try {
       this.logger.log(`Building create verification transaction for wallet: ${buildDto.wallet}, source account: ${buildDto.sourceAccount}`);
-
-      // Create a verification object compatible with the new interface
+      
       const verification = {
-        issuer: 'admin', // Default issuer for admin-created verifications
+        issuer: 'admin',
         points: buildDto.points,
         timestamp: BigInt(Date.now()),
         vtype: this.convertToVerificationType(buildDto.verificationType)
       };
-
-      // Call the stellar service to build the transaction
+      
       const result = await this.stellarService.buildCreateVerificationTransaction(
         buildDto.wallet,
         verification,
         buildDto.sourceAccount
       );
-
+      
       if (result.success) {
         this.logger.log(`Transaction built successfully for wallet: ${buildDto.wallet}`);
         return {
@@ -178,7 +179,6 @@ export class AdminService {
           error: result.error
         };
       }
-
     } catch (error) {
       this.logger.error(`Failed to build create verification transaction for wallet: ${buildDto.wallet}`, error);
       return {
@@ -191,23 +191,17 @@ export class AdminService {
 
   /**
    * Generate a new API key for hackathon participants
-   * Returns a simple API key that can be used for authentication
    */
   async generateApiKey(): Promise<ApiKeyResponse> {
     try {
       this.logger.log('Generating new API key for hackathon participant');
-
-      // Generate a simple API key using crypto
-      const crypto = require('crypto');
       const apiKey = `veridion_${crypto.randomBytes(32).toString('hex')}`;
-
       this.logger.log('API key generated successfully');
       return {
         success: true,
         message: 'API key generated successfully',
         apiKey: apiKey
       };
-
     } catch (error) {
       this.logger.error('Failed to generate API key', error);
       return {
@@ -220,15 +214,12 @@ export class AdminService {
 
   /**
    * Generate an API key for human-verified users
-   * Checks if the user is human via their wallet address and score
    */
   async generateApiKeyForHuman(wallet: string): Promise<HumanApiKeyResponse> {
     try {
       this.logger.log(`Generating API key for human-verified wallet: ${wallet}`);
-
-      // Check if the user is human verified
+      
       const humanCheck = await this.platformService.isHuman(wallet);
-
       if (!humanCheck.success) {
         this.logger.warn(`Human verification failed for wallet: ${wallet}, error: ${humanCheck.message}`);
         return {
@@ -237,7 +228,7 @@ export class AdminService {
           error: humanCheck.message
         };
       }
-
+      
       if (!humanCheck.isHuman) {
         this.logger.warn(`User is not human verified for wallet: ${wallet}, score: ${humanCheck.score}`);
         return {
@@ -248,11 +239,8 @@ export class AdminService {
           error: 'User does not meet human verification requirements'
         };
       }
-
-      // Generate API key for verified human user
-      const crypto = require('crypto');
+      
       const apiKey = `veridion_hm_${crypto.randomBytes(32).toString('hex')}`;
-
       this.logger.log(`API key generated successfully for human-verified wallet: ${wallet}, score: ${humanCheck.score}`);
       return {
         success: true,
@@ -261,7 +249,6 @@ export class AdminService {
         isHuman: true,
         score: humanCheck.score
       };
-
     } catch (error) {
       this.logger.error(`Failed to generate API key for wallet: ${wallet}`, error);
       return {
@@ -284,7 +271,6 @@ export class AdminService {
       case 'github':
         return { tag: 'GitHub', values: undefined };
       default:
-        // For custom types, wrap in Custom
         return { tag: 'Custom', values: [type] };
     }
   }
@@ -296,24 +282,21 @@ export class AdminService {
     return this.stellarService.getAccountSequence(accountId);
   }
 
-
   /**
    * Build a client-based register transaction (BUILD phase)
-   * Uses the createClient method for building transactions
    */
   async buildClientRegisterTransaction(
     buildDto: BuildRegisterTransactionDto
   ): Promise<BuildRegisterTransactionResponse> {
     try {
       this.logger.log(`Building client register transaction for wallet: ${buildDto.wallet}`);
-
-      // Call the stellar service to build the transaction using the client method
+      
       const result = await this.stellarService.createClientAndBuildRegisterTransaction(
         buildDto.wallet,
         buildDto.name,
         buildDto.surnames
       );
-
+      
       if (result.success) {
         this.logger.log(`Client transaction built successfully for wallet: ${buildDto.wallet}`);
         return {
@@ -335,7 +318,6 @@ export class AdminService {
           error: result.error
         };
       }
-
     } catch (error) {
       this.logger.error(`Failed to build client register transaction for wallet: ${buildDto.wallet}`, error);
       return {
@@ -348,13 +330,11 @@ export class AdminService {
 
   /**
    * Get user status from verifications
-   * Searches through user verifications to find Custom verification with status
    */
   async getStatus(wallet: string): Promise<GetStatusResponse> {
     try {
       this.logger.log(`Getting status for wallet: ${wallet}`);
-
-      // Validate wallet address format
+      
       if (!this.stellarService.validateWalletAddress(wallet)) {
         return {
           success: false,
@@ -362,18 +342,15 @@ export class AdminService {
           error: 'Invalid wallet address format'
         };
       }
-
-      // Get all verifications for the user
+      
       const verifications = await this.stellarService.getVerifications(wallet);
-
-      // Look for Custom verification with status (most recent one)
+      
       let latestStatus: StatusType | null = null;
       let latestTimestamp = BigInt(0);
-
+      
       for (const verification of verifications) {
         if (verification.vtype.tag === 'Custom' && verification.vtype.values[0]) {
           const customValue = verification.vtype.values[0];
-          // Check if it's a status verification
           if (['APPROVED', 'PENDING', 'REJECTED'].includes(customValue)) {
             const status = customValue as StatusType;
             if (verification.timestamp > latestTimestamp) {
@@ -383,7 +360,7 @@ export class AdminService {
           }
         }
       }
-
+      
       if (latestStatus) {
         this.logger.log(`Status found for wallet: ${wallet}, status: ${latestStatus}`);
         return {
@@ -399,7 +376,6 @@ export class AdminService {
           message: 'No status found, defaulting to PENDING'
         };
       }
-
     } catch (error) {
       this.logger.error(`Failed to get status for wallet: ${wallet}`, error);
       return {
@@ -412,7 +388,6 @@ export class AdminService {
 
   /**
    * Update user status by submitting an upsert_verification transaction on-chain.
-   * Routed through the serial Stellar transaction queue with optional idempotency.
    */
   async updateStatus(
     wallet: string,
@@ -420,7 +395,6 @@ export class AdminService {
     options?: UpdateStatusOptions,
   ): Promise<UpdateStatusResponse> {
     const operation = 'upsert_verification';
-
     try {
       this.logger.log(
         `Updating status for wallet: ${wallet}, status: ${updateDto.status}, source: ${updateDto.sourceAccount}`,
@@ -454,7 +428,7 @@ export class AdminService {
         options?.idempotencyKey ??
         (options?.sessionToken
           ? crypto
-              .createHash('sha256')
+               .createHash('sha256')
               .update(`${wallet}:${operation}:${options.sessionToken}`)
               .digest('hex')
           : undefined);
@@ -484,7 +458,7 @@ export class AdminService {
             skipped: true,
             message: 'Duplicate submission skipped (unresolved dead-letter exists)',
           };
-        }
+        } 
       }
 
       const verification = {
@@ -556,14 +530,12 @@ export class AdminService {
   /**
    * Register a wallet's identity on-chain (admin-sponsored), routed through the
    * serial Stellar transaction queue with retry/backoff and idempotency.
-   * On success persists the identity in Firestore (users collection).
    */
   async createPass(
     dto: CreatePassDto,
     options?: CreatePassOptions,
   ): Promise<CreatePassResponse> {
     const operation = 'register';
-
     try {
       this.logger.log(
         `Creating pass (register) for wallet: ${dto.wallet}, source: ${dto.sourceAccount}`,
@@ -576,7 +548,6 @@ export class AdminService {
         return { success: false, message: 'Invalid source account format', error: 'Invalid source account format' };
       }
 
-      // A wallet can only register once -> idempotency keyed on wallet:register
       const idempotencyKey =
         options?.idempotencyKey ??
         crypto.createHash('sha256').update(`${dto.wallet}:${operation}`).digest('hex');
@@ -606,7 +577,7 @@ export class AdminService {
             surnames: dto.surnames,
             sourceAccount: dto.sourceAccount,
           }),
-        idempotencyKey,
+                idempotencyKey,
       );
 
       if (result.alreadyRegistered) {
@@ -669,11 +640,97 @@ export class AdminService {
   }
 
   /**
+   * Update user profile on-chain, routed through the serial Stellar transaction 
+   * queue with retry/backoff and idempotency.
+   */
+  async updateProfile(
+    dto: UpdateProfileDto,
+    options?: UpdateProfileOptions,
+  ): Promise<UpdateProfileResponse> {
+    const operation = 'update_profile';
+    try {
+      this.logger.log(`Updating profile for wallet: ${dto.wallet}, source: ${dto.sourceAccount}`);
+
+      if (!this.stellarService.validateWalletAddress(dto.wallet)) {
+        return { success: false, message: 'Invalid wallet address format', error: 'Invalid wallet address format' };
+      }
+      if (!this.stellarService.validateWalletAddress(dto.sourceAccount)) {
+        return { success: false, message: 'Invalid source account format', error: 'Invalid source account format' };
+      }
+
+      const idempotencyKey =
+        options?.idempotencyKey ??
+        crypto.createHash('sha256').update(`${dto.wallet}:${operation}:${dto.name}:${dto.surnames}`).digest('hex');
+
+      if (this.stellarQueue.hasInFlightKey(idempotencyKey)) {
+        this.logger.log(`Skipping duplicate in-flight update_profile for key=${idempotencyKey}`);
+        return { success: true, skipped: true, message: 'Duplicate update skipped (already in queue)' };
+      }
+
+      const unresolved = await this.failedTxRepository.findUnresolvedByIdempotencyKey(idempotencyKey);
+      if (unresolved) {
+        this.logger.log(`Skipping duplicate update_profile for unresolved dead-letter key=${idempotencyKey}`);
+        return { success: true, skipped: true, message: 'Duplicate update skipped (unresolved dead-letter exists)' };
+      }
+
+      const payload = {
+        name: dto.name,
+        surnames: dto.surnames,
+        sourceAccount: dto.sourceAccount,
+      };
+
+      const result = await this.stellarQueue.enqueue(
+        () =>
+          this.stellarService.submitUpdateProfileWithRetry({
+            wallet: dto.wallet,
+            name: dto.name,
+            surnames: dto.surnames,
+            sourceAccount: dto.sourceAccount,
+          }),
+        idempotencyKey,
+      );
+
+      if (result.success) {
+        this.logger.log(`Profile updated on-chain: ${dto.wallet}, hash: ${result.transactionHash}`);
+        return {
+          success: true,
+          message: 'Profile updated successfully',
+          transactionHash: result.transactionHash,
+          sourceAccount: dto.sourceAccount,
+        };
+      }
+
+      await this.failedTxRepository.create({
+        wallet: dto.wallet,
+        operation,
+        payload,
+        idempotencyKey,
+        attempts: result.attempts,
+        lastError: result.lastError ?? 'Unknown error',
+        resolved: false,
+        createdAt: new Date(),
+      });
+
+      return {
+        success: false,
+        message: `Failed to update profile: ${result.lastError}`,
+        error: result.lastError,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to update profile for wallet: ${dto.wallet}`, error);
+      return {
+        success: false,
+        message: `Failed to update profile: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
    * Re-enqueue a dead-letter Stellar transaction for retry.
    */
   async retryFailedStellarTx(id: string): Promise<RetryStellarTxResponse> {
     const record = await this.failedTxRepository.findById(id);
-
     if (!record) {
       return {
         success: false,
@@ -732,6 +789,44 @@ export class AdminService {
       };
     }
 
+    if (record.operation === 'update_profile') {
+      const sourceAccount = record.payload.sourceAccount as string;
+      const name = record.payload.name as string;
+      const surnames = record.payload.surnames as string;
+
+      if (!sourceAccount || name === undefined || surnames === undefined) {
+        return {
+          success: false,
+          message: 'Dead-letter payload missing sourceAccount, name, or surnames',
+          error: 'INVALID_PAYLOAD',
+        };
+      }
+
+      const result = await this.stellarQueue.enqueue(() =>
+        this.stellarService.submitUpdateProfileWithRetry({
+          wallet: record.wallet,
+          name,
+          surnames,
+          sourceAccount,
+        }),
+      );
+
+      if (result.success) {
+        await this.failedTxRepository.markResolved(id, result.transactionHash);
+        return {
+          success: true,
+          message: 'Dead-letter update_profile retried successfully',
+          transactionHash: result.transactionHash,
+        };
+      }
+
+      return {
+        success: false,
+        message: `Retry failed: ${result.lastError}`,
+        error: result.lastError,
+      };
+    }
+
     // Default: upsert_verification (existing behavior)
     const sourceAccount = record.payload.sourceAccount as string;
     const status = record.payload.status as StatusType;
@@ -774,5 +869,4 @@ export class AdminService {
       error: result.lastError,
     };
   }
-
 }
