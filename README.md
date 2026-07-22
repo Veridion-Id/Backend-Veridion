@@ -1,10 +1,4 @@
-# Veridion Backend - Viva España - Messi lloron
-
-nos fuimos pa brasil
-
-testing
-
-probando fox points
+# Veridion Backend
 
 A scalable NestJS backend application built with TypeScript and following Domain-Driven Design (DDD) principles with a layered architecture
 
