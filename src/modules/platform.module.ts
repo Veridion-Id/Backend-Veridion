@@ -4,6 +4,7 @@ import { PlatformService } from '../application/services/platform.service';
 import { StellarService } from '../infrastructure/stellar/stellar.service';
 import { StellarTransactionQueue } from '../application/services/stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../infrastructure/firebase/failed-stellar-tx.repository';
+import { WalletStatusCacheRepository } from '../infrastructure/firebase/wallet-status-cache.repository';
 import { FirebaseModule } from './firebase.module';
 
 @Module({
@@ -14,12 +15,14 @@ import { FirebaseModule } from './firebase.module';
     StellarService,
     StellarTransactionQueue,
     FailedStellarTxRepository,
+    WalletStatusCacheRepository,
   ],
   exports: [
     PlatformService,
     StellarService,
     StellarTransactionQueue,
     FailedStellarTxRepository,
+    WalletStatusCacheRepository,
   ],
 })
 export class PlatformModule {}

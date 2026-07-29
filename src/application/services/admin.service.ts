@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import {
   StellarService,
@@ -10,6 +11,7 @@ import { PlatformService } from './platform.service';
 import { UserService } from './user.service';
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
+import { WalletStatusCacheRepository } from '../../infrastructure/firebase/wallet-status-cache.repository';
 import { 
   BuildRegisterTransactionDto,
   BuildRegisterTransactionResponse,
@@ -31,6 +33,7 @@ import { CreatePassDto, CreatePassResponse, CreatePassOptions } from '../../doma
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
+  private readonly walletStatusCacheTtlSeconds: number;
 
   constructor(
     private readonly stellarService: StellarService,
@@ -38,7 +41,12 @@ export class AdminService {
     private readonly stellarQueue: StellarTransactionQueue,
     private readonly failedTxRepository: FailedStellarTxRepository,
     private readonly userService: UserService,
-  ) {}
+    private readonly walletStatusCacheRepository: WalletStatusCacheRepository,
+    private readonly configService: ConfigService,
+  ) {
+    this.walletStatusCacheTtlSeconds =
+      Number(this.configService.get('WALLET_STATUS_CACHE_TTL_SECONDS')) || 21600;
+  }
 
 
   /**
@@ -363,6 +371,18 @@ export class AdminService {
         };
       }
 
+      const cached = await this.walletStatusCacheRepository.get(wallet);
+      if (
+        cached &&
+        (Date.now() - cached.updatedAt.getTime()) / 1000 <= this.walletStatusCacheTtlSeconds
+      ) {
+        return {
+          success: true,
+          status: cached.status,
+          message: `Status retrieved successfully: ${cached.status}`,
+        };
+      }
+
       // Get all verifications for the user
       const verifications = await this.stellarService.getVerifications(wallet);
 
@@ -382,6 +402,18 @@ export class AdminService {
             }
           }
         }
+      }
+
+      try {
+        await this.walletStatusCacheRepository.upsert(wallet, {
+          status: latestStatus ?? 'PENDING',
+          source: 'backfill',
+        });
+      } catch (cacheError) {
+        this.logger.error(
+          `Failed to backfill wallet status cache for wallet: ${wallet}`,
+          cacheError,
+        );
       }
 
       if (latestStatus) {
@@ -514,12 +546,25 @@ export class AdminService {
         this.logger.log(
           `Status updated on-chain for wallet: ${wallet}, status: ${updateDto.status}, hash: ${result.transactionHash}`,
         );
-        return {
+        const response: UpdateStatusResponse = {
           success: true,
           message: `Status updated on-chain: ${updateDto.status}`,
           transactionHash: result.transactionHash,
           sourceAccount: updateDto.sourceAccount,
         };
+        try {
+          await this.walletStatusCacheRepository.upsert(wallet, {
+            status: updateDto.status,
+            source: 'admin-update',
+            transactionHash: result.transactionHash,
+          });
+        } catch (cacheError) {
+          this.logger.error(
+            `Failed to write wallet status cache after update for wallet: ${wallet}`,
+            cacheError,
+          );
+        }
+        return response;
       }
 
       if (idempotencyKey) {
@@ -761,6 +806,18 @@ export class AdminService {
 
     if (result.success) {
       await this.failedTxRepository.markResolved(id, result.transactionHash);
+      try {
+        await this.walletStatusCacheRepository.upsert(record.wallet, {
+          status,
+          source: 'admin-update',
+          transactionHash: result.transactionHash,
+        });
+      } catch (cacheError) {
+        this.logger.error(
+          `Failed to write wallet status cache after dead-letter retry for wallet: ${record.wallet}`,
+          cacheError,
+        );
+      }
       return {
         success: true,
         message: 'Dead-letter transaction retried successfully',

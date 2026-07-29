@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { AdminService } from './admin.service';
 import { StellarService } from '../../infrastructure/stellar/stellar.service'
 import { PlatformService } from './platform.service';
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
+import { WalletStatusCacheRepository } from '../../infrastructure/firebase/wallet-status-cache.repository';
 import { UserService } from './user.service';
 import { 
   BuildRegisterTransactionDto,
@@ -18,6 +20,7 @@ describe('AdminService', () => {
   let platformService: jest.Mocked<PlatformService>;
   let failedTxRepository: jest.Mocked<FailedStellarTxRepository>;
   let userService: jest.Mocked<UserService>;
+  let walletStatusCacheRepository: jest.Mocked<WalletStatusCacheRepository>;
 
   beforeEach(async () => {
     const mockStellarService = {
@@ -26,6 +29,8 @@ describe('AdminService', () => {
       buildCreateVerificationTransaction: jest.fn(),
       validateWalletAddress: jest.fn().mockReturnValue(true),
       submitRegisterWithRetry: jest.fn(),
+      submitVerificationWithRetry: jest.fn(),
+      getVerifications: jest.fn(),
     };
 
     const mockUserService = {
@@ -51,6 +56,20 @@ describe('AdminService', () => {
       markResolved: jest.fn(),
     };
 
+    const mockWalletStatusCacheRepository = {
+      get: jest.fn().mockResolvedValue(null),
+      upsert: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const mockConfigService = {
+      get: jest.fn((key: string) => {
+        if (key === 'WALLET_STATUS_CACHE_TTL_SECONDS') {
+          return '21600';
+        }
+        return undefined;
+      }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminService,
@@ -74,6 +93,14 @@ describe('AdminService', () => {
           provide: UserService,
           useValue: mockUserService,
         },
+        {
+          provide: WalletStatusCacheRepository,
+          useValue: mockWalletStatusCacheRepository,
+        },
+        {
+          provide: ConfigService,
+          useValue: mockConfigService,
+        },
       ],
     }).compile();
 
@@ -82,8 +109,14 @@ describe('AdminService', () => {
     platformService = module.get(PlatformService);
     failedTxRepository = module.get(FailedStellarTxRepository);
     userService = module.get(UserService);
+    walletStatusCacheRepository = module.get(WalletStatusCacheRepository);
 
     jest.clearAllMocks();
+    // Re-apply defaults cleared by clearAllMocks
+    stellarService.validateWalletAddress.mockReturnValue(true);
+    failedTxRepository.findUnresolvedByIdempotencyKey.mockResolvedValue(null);
+    walletStatusCacheRepository.get.mockResolvedValue(null);
+    walletStatusCacheRepository.upsert.mockResolvedValue(undefined);
   });
 
   describe('buildRegisterTransaction', () => {
@@ -412,6 +445,110 @@ describe('AdminService', () => {
       expect(result.success).toBe(false);
       expect(result.message).toBe('Failed to generate API key: Network error');
       expect(result.error).toBe('Network error');
+    });
+  });
+
+  describe('getStatus', () => {
+    const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+
+    it('returns cached status without calling getVerifications when cache is fresh', async () => {
+      walletStatusCacheRepository.get.mockResolvedValue({
+        wallet,
+        status: 'APPROVED',
+        source: 'admin-update',
+        updatedAt: new Date(),
+      });
+
+      const result = await service.getStatus(wallet);
+
+      expect(result).toEqual({
+        success: true,
+        status: 'APPROVED',
+        message: 'Status retrieved successfully: APPROVED',
+      });
+      expect(stellarService.getVerifications).not.toHaveBeenCalled();
+      expect(walletStatusCacheRepository.upsert).not.toHaveBeenCalled();
+    });
+
+    it('falls back to scan and backfills cache when cache is missing', async () => {
+      walletStatusCacheRepository.get.mockResolvedValue(null);
+      stellarService.getVerifications.mockResolvedValue([
+        {
+          issuer: 'admin',
+          points: 0,
+          timestamp: BigInt(1000),
+          vtype: { tag: 'Custom', values: ['REJECTED'] },
+        },
+      ] as any);
+
+      const result = await service.getStatus(wallet);
+
+      expect(stellarService.getVerifications).toHaveBeenCalledWith(wallet);
+      expect(walletStatusCacheRepository.upsert).toHaveBeenCalledWith(wallet, {
+        status: 'REJECTED',
+        source: 'backfill',
+      });
+      expect(result).toEqual({
+        success: true,
+        status: 'REJECTED',
+        message: 'Status retrieved successfully: REJECTED',
+      });
+    });
+
+    it('falls back to scan when cached entry is older than TTL', async () => {
+      const staleDate = new Date(Date.now() - 21601 * 1000);
+      walletStatusCacheRepository.get.mockResolvedValue({
+        wallet,
+        status: 'APPROVED',
+        source: 'backfill',
+        updatedAt: staleDate,
+      });
+      stellarService.getVerifications.mockResolvedValue([
+        {
+          issuer: 'admin',
+          points: 0,
+          timestamp: BigInt(2000),
+          vtype: { tag: 'Custom', values: ['PENDING'] },
+        },
+      ] as any);
+
+      const result = await service.getStatus(wallet);
+
+      expect(stellarService.getVerifications).toHaveBeenCalledWith(wallet);
+      expect(walletStatusCacheRepository.upsert).toHaveBeenCalledWith(wallet, {
+        status: 'PENDING',
+        source: 'backfill',
+      });
+      expect(result).toEqual({
+        success: true,
+        status: 'PENDING',
+        message: 'Status retrieved successfully: PENDING',
+      });
+    });
+  });
+
+  describe('updateStatus', () => {
+    const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+    const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
+
+    it('writes through to the cache with source admin-update on success', async () => {
+      stellarService.submitVerificationWithRetry.mockResolvedValue({
+        success: true,
+        transactionHash: 'tx-status-hash',
+        attempts: 1,
+      });
+
+      const result = await service.updateStatus(wallet, {
+        status: 'APPROVED',
+        sourceAccount,
+      });
+
+      expect(result.success).toBe(true);
+      expect(walletStatusCacheRepository.upsert).toHaveBeenCalledWith(wallet, {
+        status: 'APPROVED',
+        source: 'admin-update',
+        transactionHash: 'tx-status-hash',
+      });
     });
   });
 

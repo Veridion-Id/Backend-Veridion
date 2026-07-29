@@ -4,26 +4,43 @@ import { AdminService } from './admin.service';
 import { 
   VeriffWebhookDto, 
   VeriffWebhookResponse, 
-  VeriffDecision,
   VeriffConfig 
 } from '../../domain/entities/veriff.entity';
 import { StatusType } from '../../domain/entities/admin.entity';
+import {
+  VeriffWebhookEvent,
+  VeriffWebhookOutcome,
+} from '../../domain/entities/veriff-webhook-event.entity';
+import { VeriffWebhookEventRepository } from '../../infrastructure/firebase/veriff-webhook-event.repository';
 import * as crypto from 'crypto';
+
+const TERMINAL_OUTCOMES: ReadonlySet<VeriffWebhookOutcome> = new Set([
+  'PROCESSED',
+  'REJECTED_NO_WALLET',
+  'REJECTED_STALE',
+]);
 
 @Injectable()
 export class VeriffService {
   private readonly logger = new Logger(VeriffService.name);
   private readonly veriffConfig: VeriffConfig;
+  private readonly maxAgeSeconds: number;
+  private readonly clockSkewSeconds: number;
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly adminService: AdminService
+    private readonly adminService: AdminService,
+    private readonly veriffWebhookEventRepository: VeriffWebhookEventRepository,
   ) {
     this.veriffConfig = {
       webhookSecret: this.configService.get<string>('VERIFF_WEBHOOK_SECRET') || '',
       baseUrl: this.configService.get<string>('VERIFF_BASE_URL') || 'https://stationapi.veriff.com',
       apiKey: this.configService.get<string>('VERIFF_API_KEY') || ''
     };
+    this.maxAgeSeconds =
+      Number(this.configService.get('VERIFF_WEBHOOK_MAX_AGE_SECONDS')) || 300;
+    this.clockSkewSeconds =
+      Number(this.configService.get('VERIFF_WEBHOOK_CLOCK_SKEW_SECONDS')) || 60;
   }
 
   /**
@@ -47,15 +64,60 @@ export class VeriffService {
         };
       }
 
+      const payloadHash = crypto
+        .createHash('sha256')
+        .update(JSON.stringify(webhookData))
+        .digest('hex');
+
+      const existing =
+        await this.veriffWebhookEventRepository.findByPayloadHash(payloadHash);
+
+      if (existing && TERMINAL_OUTCOMES.has(existing.outcome)) {
+        this.logger.log(
+          `Duplicate/replay Veriff webhook served from cache payloadHash=${payloadHash} outcome=${existing.outcome} session=${webhookData.sessionToken}`,
+        );
+        return existing.responseSnapshot as unknown as VeriffWebhookResponse;
+      }
+
+      // Freshness check only for brand-new events (not FAILED_UPDATE reprocessing)
+      if (!existing) {
+        const staleResponse = this.checkWebhookFreshness(webhookData);
+        if (staleResponse) {
+          await this.persistAuditEvent(null, {
+            payloadHash,
+            sessionToken: webhookData.sessionToken,
+            veriffEventId: webhookData.id,
+            outcome: 'REJECTED_STALE',
+            responseSnapshot: staleResponse as unknown as Record<string, unknown>,
+            receivedAt: new Date(),
+            attempts: 1,
+          });
+          return staleResponse;
+        }
+      }
+
       // Extract wallet address from vendorData
       const wallet = this.extractWalletFromVendorData(webhookData.vendorData);
       if (!wallet) {
         this.logger.warn(`No wallet found in vendorData for session: ${webhookData.sessionToken}`);
-        return {
+        const decision = this.mapVeriffDecisionToStatus(webhookData);
+        const response: VeriffWebhookResponse = {
           success: false,
           message: 'No wallet address found in vendor data',
           error: 'Missing wallet address'
         };
+        await this.persistAuditEvent(existing, {
+          payloadHash,
+          sessionToken: webhookData.sessionToken,
+          veriffEventId: webhookData.id,
+          decision,
+          outcome: 'REJECTED_NO_WALLET',
+          responseSnapshot: response as unknown as Record<string, unknown>,
+          receivedAt: new Date(),
+          processedAt: new Date(),
+          attempts: 1,
+        });
+        return response;
       }
 
       // Map Veriff decision to our status
@@ -68,12 +130,25 @@ export class VeriffService {
       
       if (!adminSourceAccount) {
         this.logger.warn(`Admin source account not configured. Status update required: ${status} for wallet: ${wallet}`);
-        return {
+        const response: VeriffWebhookResponse = {
           success: true,
           message: `Webhook processed successfully. Status update required: ${status} (admin source account not configured)`,
           status: status,
           wallet: wallet
         };
+        await this.persistAuditEvent(existing, {
+          payloadHash,
+          sessionToken: webhookData.sessionToken,
+          veriffEventId: webhookData.id,
+          wallet,
+          decision: status,
+          outcome: 'PROCESSED',
+          responseSnapshot: response as unknown as Record<string, unknown>,
+          receivedAt: new Date(),
+          processedAt: new Date(),
+          attempts: 1,
+        });
+        return response;
       }
 
       // Update user status
@@ -88,23 +163,50 @@ export class VeriffService {
 
       if (!updateResult.success) {
         this.logger.error(`Failed to update status for wallet: ${wallet}, error: ${updateResult.error}`);
-        return {
+        const response: VeriffWebhookResponse = {
           success: false,
           message: `Webhook processed but status update failed: ${updateResult.error}`,
           error: updateResult.error,
           status: status,
           wallet: wallet
         };
+        await this.persistAuditEvent(existing, {
+          payloadHash,
+          sessionToken: webhookData.sessionToken,
+          veriffEventId: webhookData.id,
+          wallet,
+          decision: status,
+          outcome: 'FAILED_UPDATE',
+          responseSnapshot: response as unknown as Record<string, unknown>,
+          receivedAt: new Date(),
+          processedAt: new Date(),
+          attempts: 1,
+        });
+        return response;
       }
 
       this.logger.log(`Status updated successfully for wallet: ${wallet}, status: ${status}`);
 
-      return {
+      const response: VeriffWebhookResponse = {
         success: true,
         message: `Webhook processed successfully. Status: ${status}`,
         status: status,
         wallet: wallet
       };
+      await this.persistAuditEvent(existing, {
+        payloadHash,
+        sessionToken: webhookData.sessionToken,
+        veriffEventId: webhookData.id,
+        wallet,
+        decision: status,
+        outcome: 'PROCESSED',
+        responseSnapshot: response as unknown as Record<string, unknown>,
+        transactionHash: updateResult.transactionHash,
+        receivedAt: new Date(),
+        processedAt: new Date(),
+        attempts: 1,
+      });
+      return response;
 
     } catch (error) {
       this.logger.error(`Failed to process Veriff webhook for session: ${webhookData.sessionToken}`, error);
@@ -113,6 +215,70 @@ export class VeriffService {
         message: `Failed to process webhook: ${error instanceof Error ? error.message : 'Unknown error'}`,
         error: error instanceof Error ? error.message : 'Unknown error'
       };
+    }
+  }
+
+  /**
+   * Returns a rejection response if the webhook timestamp is outside the acceptable window,
+   * or null if the event is fresh enough to process.
+   */
+  private checkWebhookFreshness(
+    webhookData: VeriffWebhookDto,
+  ): VeriffWebhookResponse | null {
+    const parsedTimestamp = new Date(webhookData.timestamp);
+    if (Number.isNaN(parsedTimestamp.getTime())) {
+      this.logger.warn(
+        `Invalid webhook timestamp for session: ${webhookData.sessionToken}`,
+      );
+      return {
+        success: false,
+        message: 'Webhook timestamp is invalid',
+        error: 'Stale webhook',
+      };
+    }
+
+    const ageSeconds = (Date.now() - parsedTimestamp.getTime()) / 1000;
+    if (ageSeconds > this.maxAgeSeconds || ageSeconds < -this.clockSkewSeconds) {
+      this.logger.warn(
+        `Stale webhook rejected for session: ${webhookData.sessionToken}, ageSeconds=${ageSeconds}`,
+      );
+      return {
+        success: false,
+        message: 'Webhook timestamp outside acceptable window',
+        error: 'Stale webhook',
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Persist (or update) the webhook audit trail. Firestore failures are logged and
+   * swallowed so they never change the response already computed for Veriff.
+   */
+  private async persistAuditEvent(
+    existingFailed: VeriffWebhookEvent | null,
+    record: Omit<VeriffWebhookEvent, 'id'>,
+  ): Promise<void> {
+    try {
+      if (existingFailed) {
+        await this.veriffWebhookEventRepository.updateOutcome(existingFailed.id, {
+          incrementAttempts: true,
+          outcome: record.outcome,
+          wallet: record.wallet,
+          decision: record.decision,
+          responseSnapshot: record.responseSnapshot,
+          transactionHash: record.transactionHash,
+          processedAt: record.processedAt,
+        });
+      } else {
+        await this.veriffWebhookEventRepository.create(record);
+      }
+    } catch (persistError) {
+      this.logger.error(
+        `Failed to persist Veriff webhook audit event payloadHash=${record.payloadHash} outcome=${record.outcome}`,
+        persistError,
+      );
     }
   }
 
