@@ -4,6 +4,7 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { StellarService } from '../../infrastructure/stellar/stellar.service'
 import { StellarTransactionQueue } from './stellar-transaction-queue.service';
 import { FailedStellarTxRepository } from '../../infrastructure/firebase/failed-stellar-tx.repository';
+import { WalletStatusCacheRepository } from '../../infrastructure/firebase/wallet-status-cache.repository';
 import { AdminService } from './admin.service';
 import { PlatformService } from './platform.service';
 import { UserService } from './user.service';
@@ -118,6 +119,10 @@ describe('AdminService idempotency and queue routing', () => {
     markRetried: jest.Mock;
     markResolved: jest.Mock;
   };
+  let walletStatusCacheRepository: {
+    get: jest.Mock;
+    upsert: jest.Mock;
+  };
 
   const wallet = 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
   const sourceAccount = 'GXYZ9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210ZYXWVUTSRQP';
@@ -140,6 +145,11 @@ describe('AdminService idempotency and queue routing', () => {
       markResolved: jest.fn(),
     };
 
+    walletStatusCacheRepository = {
+      get: jest.fn().mockResolvedValue(null),
+      upsert: jest.fn().mockResolvedValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminService,
@@ -148,6 +158,8 @@ describe('AdminService idempotency and queue routing', () => {
         { provide: PlatformService, useValue: { isHuman: jest.fn() } },
         { provide: UserService, useValue: { create: jest.fn() } },
         { provide: FailedStellarTxRepository, useValue: failedTxRepository },
+        { provide: WalletStatusCacheRepository, useValue: walletStatusCacheRepository },
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue(undefined) } },
       ],
     }).compile();
 

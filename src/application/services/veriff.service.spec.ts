@@ -3,11 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { VeriffService } from './veriff.service';
 import { AdminService } from './admin.service';
 import { VeriffWebhookDto, VeriffDecision } from '../../domain/entities/veriff.entity';
+import { VeriffWebhookEventRepository } from '../../infrastructure/firebase/veriff-webhook-event.repository';
 
 describe('VeriffService', () => {
   let service: VeriffService;
   let adminService: AdminService;
   let configService: ConfigService;
+  let veriffWebhookEventRepository: VeriffWebhookEventRepository;
 
   const mockAdminService = {
     updateStatus: jest.fn(),
@@ -17,7 +19,17 @@ describe('VeriffService', () => {
     get: jest.fn(),
   };
 
+  const mockVeriffWebhookEventRepository = {
+    findByPayloadHash: jest.fn().mockResolvedValue(null),
+    create: jest.fn().mockResolvedValue({ id: 'event-1' }),
+    updateOutcome: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
+    mockVeriffWebhookEventRepository.findByPayloadHash.mockResolvedValue(null);
+    mockVeriffWebhookEventRepository.create.mockResolvedValue({ id: 'event-1' });
+    mockVeriffWebhookEventRepository.updateOutcome.mockResolvedValue(undefined);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VeriffService,
@@ -29,12 +41,19 @@ describe('VeriffService', () => {
           provide: ConfigService,
           useValue: mockConfigService,
         },
+        {
+          provide: VeriffWebhookEventRepository,
+          useValue: mockVeriffWebhookEventRepository,
+        },
       ],
     }).compile();
 
     service = module.get<VeriffService>(VeriffService);
     adminService = module.get<AdminService>(AdminService);
     configService = module.get<ConfigService>(ConfigService);
+    veriffWebhookEventRepository = module.get<VeriffWebhookEventRepository>(
+      VeriffWebhookEventRepository,
+    );
   });
 
   afterEach(() => {
@@ -73,7 +92,7 @@ describe('VeriffService', () => {
         },
       },
       vendorData: 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890',
-      timestamp: '2024-01-01T00:00:00Z',
+      timestamp: new Date().toISOString(),
     };
 
     it('should process webhook successfully with valid signature', async () => {
@@ -122,6 +141,8 @@ describe('VeriffService', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Unauthorized');
       expect(adminService.updateStatus).not.toHaveBeenCalled();
+      expect(veriffWebhookEventRepository.findByPayloadHash).not.toHaveBeenCalled();
+      expect(veriffWebhookEventRepository.create).not.toHaveBeenCalled();
     });
 
     it('should handle missing admin source account', async () => {
@@ -156,9 +177,17 @@ describe('VeriffService', () => {
       ];
 
       for (const testCase of testCases) {
-        const webhookData = { ...mockWebhookData, status: testCase.veriffStatus };
+        const webhookData = {
+          ...mockWebhookData,
+          status: testCase.veriffStatus,
+          timestamp: new Date().toISOString(),
+        };
         
         mockConfigService.get.mockReturnValue('test-secret');
+        mockAdminService.updateStatus.mockResolvedValue({
+          success: true,
+          message: 'Status updated successfully',
+        });
         jest.spyOn(service as any, 'verifyWebhookSignature').mockReturnValue(true);
         jest.spyOn(service as any, 'extractWalletFromVendorData').mockReturnValue('GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890');
         jest.spyOn(service as any, 'mapVeriffDecisionToStatus').mockReturnValue(testCase.expectedStatus);
@@ -167,6 +196,75 @@ describe('VeriffService', () => {
         
         expect(result.status).toBe(testCase.expectedStatus);
       }
+    });
+
+    it('should return cached responseSnapshot for duplicate PROCESSED payload without calling updateStatus', async () => {
+      const signature = 'sha256=valid-signature';
+      const cachedResponse = {
+        success: true,
+        message: 'Webhook processed successfully. Status: APPROVED',
+        status: 'APPROVED',
+        wallet: 'GABC1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890',
+      };
+
+      mockConfigService.get.mockImplementation((key: string) => {
+        if (key === 'VERIFF_WEBHOOK_SECRET') return 'test-secret';
+        return undefined;
+      });
+
+      mockVeriffWebhookEventRepository.findByPayloadHash.mockResolvedValue({
+        id: 'existing-event',
+        payloadHash: 'abc',
+        sessionToken: 'test-session-token',
+        veriffEventId: 'test-id',
+        outcome: 'PROCESSED',
+        responseSnapshot: cachedResponse,
+        attempts: 1,
+        receivedAt: new Date(),
+      });
+
+      jest.spyOn(service as any, 'verifyWebhookSignature').mockReturnValue(true);
+
+      const result = await service.processWebhook(mockWebhookData, signature);
+
+      expect(result).toEqual(cachedResponse);
+      expect(adminService.updateStatus).not.toHaveBeenCalled();
+      expect(veriffWebhookEventRepository.create).not.toHaveBeenCalled();
+      expect(veriffWebhookEventRepository.updateOutcome).not.toHaveBeenCalled();
+    });
+
+    it('should reject stale brand-new events and persist REJECTED_STALE', async () => {
+      const signature = 'sha256=valid-signature';
+      const staleWebhookData: VeriffWebhookDto = {
+        ...mockWebhookData,
+        timestamp: '2020-01-01T00:00:00Z',
+      };
+
+      mockConfigService.get.mockImplementation((key: string) => {
+        if (key === 'VERIFF_WEBHOOK_SECRET') return 'test-secret';
+        return undefined;
+      });
+
+      jest.spyOn(service as any, 'verifyWebhookSignature').mockReturnValue(true);
+
+      const result = await service.processWebhook(staleWebhookData, signature);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Stale webhook');
+      expect(result.message).toBe('Webhook timestamp outside acceptable window');
+      expect(adminService.updateStatus).not.toHaveBeenCalled();
+      expect(veriffWebhookEventRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'REJECTED_STALE',
+          sessionToken: 'test-session-token',
+          veriffEventId: 'test-id',
+          attempts: 1,
+          responseSnapshot: expect.objectContaining({
+            success: false,
+            error: 'Stale webhook',
+          }),
+        }),
+      );
     });
   });
 });
