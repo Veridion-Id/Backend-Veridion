@@ -77,6 +77,12 @@ export interface StatusResponse {
   error?: string;
 }
 
+interface RetryBackoffConfig {
+  baseMs: number;
+  maxMs: number;
+  jitterRatio: number;
+}
+
 @Injectable()
 export class StellarService implements PassportPort {
   private readonly logger = new Logger(StellarService.name);
@@ -1003,9 +1009,7 @@ export class StellarService implements PassportPort {
     const maxRetries = Number(
       this.configService.get<string>('STELLAR_TX_MAX_RETRIES', '5'),
     );
-    const backoffBaseMs = Number(
-      this.configService.get<string>('STELLAR_TX_BACKOFF_BASE_MS', '300'),
-    );
+    const retryBackoff = this.getRetryBackoffConfig();
 
     if (!this.adminKeypair) {
       return {
@@ -1040,7 +1044,7 @@ export class StellarService implements PassportPort {
           break;
         }
 
-        const delayMs = backoffBaseMs * Math.pow(2, attempt - 1);
+        const delayMs = this.calculateRetryDelayMs(attempt, retryBackoff);
         await this.sleep(delayMs);
       }
     }
@@ -1061,9 +1065,7 @@ export class StellarService implements PassportPort {
     const maxRetries = Number(
       this.configService.get<string>('STELLAR_TX_MAX_RETRIES', '5'),
     );
-    const backoffBaseMs = Number(
-      this.configService.get<string>('STELLAR_TX_BACKOFF_BASE_MS', '300'),
-    );
+    const retryBackoff = this.getRetryBackoffConfig();
 
     if (!this.adminKeypair) {
       return {
@@ -1102,7 +1104,7 @@ export class StellarService implements PassportPort {
           break;
         }
 
-        const delayMs = backoffBaseMs * Math.pow(2, attempt - 1);
+        const delayMs = this.calculateRetryDelayMs(attempt, retryBackoff);
         await this.sleep(delayMs);
       }
     }
@@ -1213,6 +1215,55 @@ export class StellarService implements PassportPort {
       lower.includes('502') ||
       lower.includes('504')
     );
+  }
+
+  private getRetryBackoffConfig(): RetryBackoffConfig {
+    const baseMs = this.getNonNegativeConfigNumber(
+      'STELLAR_TX_BACKOFF_BASE_MS',
+      '300',
+    );
+    const maxMs = this.getNonNegativeConfigNumber(
+      'STELLAR_TX_BACKOFF_MAX_MS',
+      '5000',
+    );
+    const jitterRatio = this.clamp(
+      this.getNonNegativeConfigNumber(
+        'STELLAR_TX_BACKOFF_JITTER_RATIO',
+        '1',
+      ),
+      0,
+      1,
+    );
+
+    return { baseMs, maxMs, jitterRatio };
+  }
+
+  private getNonNegativeConfigNumber(key: string, defaultValue: string): number {
+    const value = Number(this.configService.get<string>(key, defaultValue));
+    return Number.isFinite(value) && value >= 0 ? value : Number(defaultValue);
+  }
+
+  private calculateRetryDelayMs(
+    attempt: number,
+    config: RetryBackoffConfig,
+  ): number {
+    const boundedDelayMs = Math.min(
+      config.maxMs,
+      config.baseMs * Math.pow(2, Math.max(0, attempt - 1)),
+    );
+
+    if (config.jitterRatio <= 0 || boundedDelayMs <= 0) {
+      return Math.round(boundedDelayMs);
+    }
+
+    const minimumDelayMs = boundedDelayMs * (1 - config.jitterRatio);
+    const jitterRangeMs = boundedDelayMs - minimumDelayMs;
+
+    return Math.round(minimumDelayMs + Math.random() * jitterRangeMs);
+  }
+
+  private clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
   }
 
   private sleep(ms: number): Promise<void> {
